@@ -1,0 +1,3 @@
+#Type, Has title ?, Title, content type name, Name, delete type after rebuilding content ?, description
+ekmod_album_image,1,Title,base_content,Album,0,"Create images"
+ekmod_category_image,1,Title,base_content,Album,0,"Create images"

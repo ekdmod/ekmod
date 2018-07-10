@@ -1,0 +1,866 @@
+<?php
+
+/**
+ * @file
+ * EKMOD module install file.
+ */
+/*
+* Define the Field API schema for a field structure.
+*
+*This hook MUST be defined in .install for it to be detected during installation and upgrade.
+*Parameters
+*
+*$field: A field structure.
+*Return value
+*
+*An associative array with the following keys:
+*
+*    columns: An array of Schema API column specifications, keyed by column name. This specifies what comprises a value for a given field. For example, a value for a number field is simply 'value', while a value for a formatted text field is the combination of 'value' and 'format'. It is recommended to avoid having the column definitions depend on field settings when possible. No assumptions should be made on how storage engines internally use the original column name to structure their storage.
+*    indexes: (optional) An array of Schema API indexes definitions. Only columns that appear in the 'columns' array are allowed. Those indexes will be used as default indexes. Callers of field_create_field() can specify additional indexes, or, at their own risk, modify the default indexes specified by the field-type module. Some storage engines might not support indexes.
+*    foreign keys: (optional) An array of Schema API foreign keys definitions.
+*
+*/
+function ekmod_schema() {
+
+  $schema['ekmod_module'] = array(
+    'description' => 'The base table for nodes.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The primary identifier for a node.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'ver' => array(	//ver - vid
+        'description' => 'The current {ekmod_revision}.ver version identifier.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'type' => array(
+        'description' => 'The {ekmod_type}.type of this node.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+
+      'ct' => array ( //Kategorija arba Kategorijos pavadinimas , tt
+      	'type' => 'int',
+      	'unsigned' => TRUE,
+      	'not null' => TRUE,
+      	'default' => 0
+      ),
+      'did' => array(
+      	'type' => 'int', 
+      	'unsigned' => TRUE, 
+      	'not null' => TRUE, 
+      	'default' => 0
+      ),
+      'language' => array(
+        'description' => 'The {languages}.language of this node.',
+        'type' => 'varchar',
+        'length' => 12,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'title' => array(
+        'description' => 'The title of this node, always treated as non-markup plain text.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'category' => array(					//rubric
+        'description' => 'Name of category.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'utr' => array(	// utr -> uid
+        'description' => 'The {users}.uid that owns this node; initially, this is the user that created it.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'acl' => array(	// acl -> uac -> kokie vartotojai leidžiami
+      'type' => 'blob', 
+      'not null' => TRUE,
+      ),
+      'status' => array(
+        'description' => 'Boolean indicating whether the node is published (visible to non-administrators).',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 1,
+      ),
+      'view_mode' => array(
+      'type' => 'varchar',
+      'length' => 1024, 
+      'not null' => TRUE, 
+      'default' => ''
+      ),
+      'created' => array(
+        'description' => 'The Unix timestamp when the node was created.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'changed' => array(
+        'description' => 'The Unix timestamp when the node was most recently saved.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'comment' => array(
+        'description' => 'Whether comments are allowed on this node: 0 = no, 1 = closed (read only), 2 = open (read/write).',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'promote' => array(
+        'description' => 'Boolean indicating whether the node should be displayed on the front page.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'sticky' => array(
+        'description' => 'Boolean indicating whether the node should be displayed at the top of lists in which it appears.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'tr' => array(	// tr -> tnid
+        'description' => 'The translation set id for this node, which equals the node id of the source post in each set.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ), 
+      'translate' => array(
+        'description' => 'A boolean indicating whether this translation page needs to be updated.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),      
+    ),
+    'indexes' => array(
+      'ekmod_changed'        => array('changed'),
+      'ekmod_created'        => array('created'),
+      'ekmod_frontpage'      => array('promote', 'status', 'sticky', 'created'),
+      'ekmod_status_type'    => array('status', 'type', 'id'),
+      'ekmod_title_type'     => array('title', array('type', 4)),
+      'ekmod_type'           => array(array('type', 4)),
+      'utr'                 	=> array('utr'),
+      'tr'                		=> array('tr'),
+      'did'                 	=> array('did'),
+      'translate'           	=> array('translate'),
+    ),
+    'unique keys' => array(
+      'ver' => array('ver'),
+    ),
+    'foreign keys' => array(
+      'ekmod_revision' => array(
+        'table' => 'ekmod_revision',
+        'columns' => array('ver' => 'ver'),
+      ),
+      'ekmod_author' => array(
+        'table' => 'users',
+        'columns' => array('utr' => 'uid'),
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+
+  $schema['ekmod_access'] = array(
+    'description' => 'Identifies which realm/grant pairs a user must possess in order to view, update, or delete specific nodes.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The {ekmod_module}.id this record affects.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'gid' => array(
+        'description' => "The grant ID a user must possess in the specified realm to gain this row's privileges on the node.",
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'realm' => array(
+        'description' => 'The realm in which the user must possess the grant ID. Each node access node can define one or more realms.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'grant_view' => array(
+        'description' => 'Boolean indicating whether a user with the realm/grant pair can view this node.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny',
+      ),
+      'grant_update' => array(
+        'description' => 'Boolean indicating whether a user with the realm/grant pair can edit this node.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny',
+      ),
+      'grant_delete' => array(
+        'description' => 'Boolean indicating whether a user with the realm/grant pair can delete this node.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny',
+      ),
+    ),
+    'primary key' => array('id', 'gid', 'realm'),
+    'foreign keys' => array(
+      'affected_node' => array(
+        'table' => 'ekmod_module',
+        'columns' => array('id' => 'id'),
+      ),
+     ),
+  );
+
+  $schema['ekmod_revision'] = array(
+    'description' => 'Stores information about each saved version of a {node}.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The {ekmod_module} this version belongs to.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'ver' => array(
+        'description' => 'The primary identifier for this version.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'utr' => array(
+        'description' => 'The {users}.uid that created this version.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'title' => array(
+        'description' => 'The title of this version.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'log' => array(
+        'description' => 'The log entry explaining the changes in this version.',
+        'type' => 'text',
+        'not null' => TRUE,
+        'size' => 'big',
+      ),
+      'timestamp' => array(
+        'description' => 'A Unix timestamp indicating when this version was created.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'status' => array(
+        'description' => 'Boolean indicating whether the node (at the time of this revision) is published (visible to non-administrators).',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 1,
+      ),
+      'comment' => array(
+        'description' => 'Whether comments are allowed on this node (at the time of this revision): 0 = no, 1 = closed (read only), 2 = open (read/write).',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'promote' => array(
+        'description' => 'Boolean indicating whether the node (at the time of this revision) should be displayed on the front page.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'sticky' => array(
+        'description' => 'Boolean indicating whether the node (at the time of this revision) should be displayed at the top of lists in which it appears.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'indexes' => array(
+      'id' => array('id'),
+      'utr' => array('utr'),
+    ),
+    'primary key' => array('ver'),
+    'foreign keys' => array(
+      'versioned_node' => array(
+        'table' => 'ekmod_module',
+        'columns' => array('id' => 'id'),
+      ),
+      'version_author' => array(
+        'table' => 'users',
+        'columns' => array('utr' => 'uid'),
+      ),
+    ),
+  );
+
+  $schema['ekmod_type'] = array(
+    'description' => 'Stores information about all defined {ekmod_module} types.',
+    'fields' => array(
+      'type' => array(
+        'description' => 'The machine-readable name of this type.',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+      ),
+      'name' => array(
+        'description' => 'The human-readable name of this type.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'translatable' => TRUE,
+      ),
+      'base' => array(
+        'description' => 'The base string used to construct callbacks corresponding to this node type.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'module' => array(
+        'description' => 'The module defining this node type.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'description' => array(
+        'description' => 'A brief description of this type.',
+        'type' => 'text',
+        'not null' => TRUE,
+        'size' => 'medium',
+        'translatable' => TRUE,
+      ),
+      'help' => array(
+        'description' => 'Help information shown to the user when creating a {ekmod_module} of this type.',
+        'type' => 'text',
+        'not null' => TRUE,
+        'size' => 'medium',
+        'translatable' => TRUE,
+      ),
+      'has_title' => array(
+        'description' => 'Boolean indicating whether this type uses the {ekmod_module}.title field.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'size' => 'tiny',
+      ),
+      'title_label' => array(
+        'description' => 'The label displayed for the title field on the edit form.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'translatable' => TRUE,
+      ),
+      'custom' => array(
+        'description' => 'A boolean indicating whether this type is defined by a module (FALSE) or by a user via Add content type (TRUE).',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny',
+      ),
+      'modified' => array(
+        'description' => 'A boolean indicating whether this type has been modified by an administrator; currently not used in any way.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny',
+      ),
+      'locked' => array(
+        'description' => 'A boolean indicating whether the administrator can change the machine name of this type.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny',
+      ),
+      'disabled' => array(
+        'description' => 'A boolean indicating whether the node type is disabled.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+        'size' => 'tiny'
+      ),
+      'orig_type' => array(
+        'description' => 'The original machine-readable name of this node type. This may be different from the current type name if the locked field is 0.',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'primary key' => array('type'),
+  );
+
+  $schema['ekmod_block_node_type'] = array(
+    'description' => 'Sets up display criteria for blocks based on content types',
+    'fields' => array(
+      'module' => array(
+        'type' => 'varchar',
+        'length' => 64,
+        'not null' => TRUE,
+        'description' => "The block's origin module, from {block}.module.",
+      ),
+      'delta' => array(
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+        'description' => "The block's unique delta within module, from {block}.delta.",
+      ),
+      'type' => array(
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+        'description' => "The machine-readable name of this type from {ekmod_type}.type.",
+      ),
+    ),
+    'primary key' => array('module', 'delta', 'type'),
+    'indexes' => array(
+      'type' => array('type'),
+    ),
+  );
+
+  $schema['ekmod_history'] = array(
+    'description' => 'A record of which {users} have read which {node}s.',
+    'fields' => array(
+      'utr' => array(
+        'description' => 'The {users}.uid that read the {node} id.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'id' => array(
+        'description' => 'The {ekmod_module}.id that was read.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'timestamp' => array(
+        'description' => 'The Unix timestamp at which the read occurred.',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+    ),
+    'primary key' => array('utr', 'id'),
+    'indexes' => array(
+      'id' => array('id'),
+    ),
+  );
+  
+  $schema['ekmod_user'] = array(
+    'description' => 'Authenticate gallery',
+    'fields'  	    => array(
+      'utr'	        => array( 'description' => "User's {users}.uid.", 'type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0, ),
+      'data'        => array( 'type' => 'blob', 'not null' => FALSE, 'size' => 'big', 'serialize' => TRUE, ),
+      'id'          => array( 'description' => "Gallery id that is allowed to use", 'type' => 'blob', 'not null' => FALSE, 'size' => 'big', 'serialize' => TRUE, ),
+      'ip'          => array( 'type' => 'varchar', 'length' => 40, 'not null' => FALSE, 'default' => '', 'description' => 'Ip address of user',  ),
+      'user_allow'  => array( 'type' => 'text', 'size' => 'medium', 'not null' => FALSE, 'description' => 'Allow access to gallery', ),
+      'user_block'	=> array( 'type' => 'text', 'size' => 'medium', 'not null' => FALSE, 'description' => 'Deny access to gallery', ),
+      'block_ip'    => array( 'type' => 'text', 'size' => 'normal', 'not null' => FALSE, 'description' => 'Ip address to block', ), //'type' => 'text', 'size' => 'normal', {'default' => '', 'type' => 'varchar', 'length' => 21845, }
+      'allow_ip'    => array( 'type' => 'text', 'size' => 'normal', 'not null' => FALSE, 'description' => 'Ip address to allow', ), //'type' => 'text', 'size' => 'normal',
+	  'description' => array( 'type' => 'text', 'size' => 'medium', 'not null' => FALSE, 'description' => "Description about user's activity", ),
+
+    ),
+
+    'foreign keys' => array(
+      'user' => array(
+        'table' => 'users',
+        'columns' => array('utr' => 'uid'),
+      ),
+    ),
+    'primary key' => array('utr'),
+    );  
+  return $schema;
+}
+
+function ekmod_field_schema($field) {
+//  if ($field['name'] == 'ekmod_album_image') {
+  return array( 
+  'columns' => array(
+      'fid' => array(
+        'description' => 'The {file_managed}.fid being referenced in this field.',
+        'type' => 'int',
+        'not null' => FALSE,
+        'unsigned' => TRUE,
+      ),
+      'alt' => array(
+        'description' => "Alternative image text, for the image's 'alt' attribute.",
+        'type' => 'varchar',
+        'length' => 512,
+        'not null' => FALSE,
+      ),
+      'title' => array(
+        'description' => "Image title text, for the image's 'title' attribute.",
+        'type' => 'varchar',
+        'length' => 1024,
+        'not null' => FALSE,
+      ),
+      'name' => array(
+        'description' => "Image's name text",
+        'type' => 'varchar',
+        'length' => 2048,
+        'not null' => FALSE,
+      ),
+      'width' => array(
+        'description' => 'The width of the image in pixels.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+      ),
+      'height' => array(
+        'description' => 'The height of the image in pixels.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+      ),
+    ),
+    'indexes' => array(
+      'fid' => array('fid'),
+    ),
+    'foreign keys' => array(
+      'fid' => array(
+        'table' => 'file_managed',
+        'columns' => array('fid' => 'fid'),
+      ),
+    ),
+  );
+}
+
+/**
+ * Implements hook_install().
+ */
+
+function ekmod_install() {
+  $t = get_t();
+  variable_set('ekmod_galler_view_mode', 'default');
+ 
+  // Create all the fields we are adding to our content type.
+  $gd = array(
+    'type' => 'int',
+    'null' => FALSE,
+    'not_null' => TRUE,
+    'unsigned' => TRUE,
+  );
+
+  $category = array(
+    'type' => 'int',
+    'not_null' => TRUE,
+    'unsigned' => TRUE,
+    'unique keys' => array('gd' => array('gd'),),
+  );
+
+  $ekmod = array(
+    'type' => 'text',
+    'size' => 'normal',
+    'not null' => FALSE,
+  );
+  
+  $name_spec = array(
+    'type' => 'varchar',
+    'length' => 2048,
+    'not null' => FALSE,
+  );
+
+  foreach (_ekmod_installed_fields() as $field) 
+  {
+    field_create_field($field);
+//    debug($field);
+
+      if(strstr($field['field_name'], 'category')) 
+    {
+    db_add_field(_field_sql_storage_tablename($field), 'cid' , $gd);
+    db_add_field(_field_sql_storage_revision_tablename($field), 'cid' , $gd);
+    db_add_unique_key(_field_sql_storage_tablename($field),'cid',array('cid' => 'cid')) ;
+    db_add_unique_key(_field_sql_storage_revision_tablename($field),'cid',array('cid' => 'cid'));
+    } else {
+    db_add_field(_field_sql_storage_tablename($field), 'cid' , $gd);
+    db_add_field(_field_sql_storage_revision_tablename($field), 'cid' , $gd);
+    }
+    db_add_field(_field_sql_storage_tablename($field), $field['field_name'] . '_name' , $name_spec);
+    db_add_field(_field_sql_storage_revision_tablename($field), $field['field_name'] . '_name' , $name_spec);
+
+  }
+  db_add_field('users','ekmod', $ekmod);
+  // Create all the instances for our fields.
+  foreach (_ekmod_installed_instances() as $instance) {
+  
+  field_create_instance($instance);
+  }
+  
+  foreach (_ekmod_module_types() as $type)
+  {
+ // debug("node_types". $type . 'type_' );
+ 	db_insert('ekmod_type')->fields($type)->execute(); 	
+    field_attach_create_bundle('ekmod', $type->type);
+   module_invoke('content', 'clear_type_cache');
+   drupal_set_message($t("<b>EKMOD module</b> is installed successfully.<br />"));
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function ekmod_uninstall() {
+    db_drop_field('users','ekmod');
+    db_query("DELETE FROM {variable} WHERE name LIKE 'ekmod_%'");
+  // Gather all the example content that might have been created while this
+  // module was enabled.
+    $sql = 'SELECT nid FROM {node} n WHERE n.type IN (:type)';
+    $result = db_query($sql, array(':type' => "'ekmod_album_category_image', 'ekmod_album_category_safe' , 'ekmod_album_image' , 'ekmod_album_image_safe'",));
+//  $result += db_query($sql, array(':type' => 'ekmod_album'));
+    $nids = array();
+    foreach ($result as $row) {
+    	$nids[] = $row->nid;
+    }
+    // Delete all the nodes at once
+    node_delete_multiple($nids);
+    // Loop over each of the fields defined by this module and delete
+    // all instances of the field, their data, and the field itself.
+    foreach (_ekmod_installed_fields() as $field) {
+//    debug($field_name);
+//    debug($field);
+    	field_delete_field($field['field_name']);
+    }
+
+    // Loop over any remaining field instances attached to the job_post
+    // content type (such as the body field) and delete them individually.
+//    $instances = field_info_instances('node', 'ekmod_album_image');
+	$instances = field_info_instances('ekmod');
+    foreach ($instances as $instance_name => $instance) {
+    	field_delete_instance($instance);
+    }
+
+    field_purge_batch(1000);
+	$path = array('ekmod/add/album-image','ekmod/add/album-category-image',);
+	$result = db_query("SELECT * FROM {menu_links} WHERE link_path IN (:link_path)", array(':link_path' => $path));
+//	var_dump($result);
+    foreach ($result as $link) {
+      _menu_delete_item($link);
+    }
+    
+
+  foreach (_ekmod_module_types() as $type)
+  {
+      field_attach_delete_bundle('ekmod', $type->type);
+      
+  }
+
+}
+
+/**
+ * Implements hook_requirements().
+ */
+function ekmod_requirements($phase) {
+  $requirements = array();
+  $t = get_t();
+
+  $ekmod_site = 'drupal';
+
+  switch ($phase) {
+    case 'runtime':
+    $ekmod_path = EKMOD_DEFAULT_PATH;
+    $path = variable_get('ekmod_location', $ekmod_path);
+    if (!file_exists($path)) {
+      $requirements['ekmod'] = array(
+        'title' => $t('EKMOD'),
+        'description' => $t('In order for the EKMOD module to work, the third party EKMOD distribution should be downloaded and its location set. It is recommended to put the third party plugin in sites/all/libraries/ekmod but the location can be changed in the !settings. Currently looking for EKMOD in %path', array('!settings' => l('settings', 'admin/config/media/ekmod'), '%path' => $path)),
+        'severity' => $phase == 'install' ? REQUIREMENT_WARNING : REQUIREMENT_ERROR,
+        'value' => $t('Third party !EKMOD software missing', array('!ekmod' => l('EKMOD', $ekmod_site))),
+      );
+    }
+    elseif (!file_exists("$path/egll.js")) {
+      $requirements['ekmod'] = array(
+        'title' => $t('EKMOD'),
+        'description' => $t('The <code>%path</code> path exists but it appears that the directory structure underneath is incorrect. Please check that <code>%ekmod</code> exists.',
+          array('%path' => $path,
+            '%ekmod' => "$path/egll.js",
+          )),
+        'severity' => $phase == 'install' ? REQUIREMENT_WARNING : REQUIREMENT_ERROR,
+        'value' => $t('3rd party EKMOD software not properly installed'),
+      );
+    }
+    elseif ($phase == 'runtime') {
+    	// Only show rebuild button if there are either 0, or 2 or more, rows
+  		// in the {node_access} table, or if there are modules that
+  		// implement hook_node_grants().
+  		$grant_count = db_query('SELECT COUNT(*) FROM {ekmod_access}')->fetchField();
+  		if ($grant_count != 1 || count(module_implements('ekmod_grants')) > 0) {
+    	$value = format_plural($grant_count, 'One permission in use', '@count permissions in use', array('@count' => $grant_count));
+  		} else {
+    	$value = $t('Disabled');
+  		}
+      $description = $t('If the site is experiencing problems with permissions to content, you may have to rebuild the permissions cache. Rebuilding will remove all privileges to content and replace them with permissions based on the current modules and settings. Rebuilding may take some time if there is a lot of content or complex permission settings. After rebuilding has completed, content will automatically use the new permissions.');
+      $requirements['ekmod'] = array(
+        'title' => $t('EKMOD'),
+        'severity' => REQUIREMENT_OK,
+        'value' => $t('Installed correctly'),
+      	'description' => $description . ' ' . l($t('Rebuild EKMOD permissions'), 'admin/reports/status/ekmod/rebuild'),
+      );
+    }
+  }
+  return $requirements;
+}
+
+
+/*
+ * Rebuild theme so the changes to EKMOD formatter are available
+ */
+function ekmod_update_7001() {
+  drupal_theme_rebuild();
+}
+/**
+* Return a structured array defining the fields created by this content type.
+* For the job post module there is only one additional field – the company name
+* Other fields could be added by defining them in this function as additional elements
+* in the array below
+*/
+function _ekmod_installed_fields() {
+$t = get_t();
+  return array(
+    'safe_image' => array(
+      'field_name' => 'safe_image',
+      // define the field type as image
+      'type' => 'safe_image',
+      'label' => $t('Field for EKMOD module safe image'),
+      //'settings' => array(
+      //'uri_scheme' => 'public',
+      //'default_image' => FALSE,
+      //),
+      'settings' => array(
+        'uri_scheme' => variable_get('file_default_scheme', 'private'),
+        'default_image' => 0,
+      ),
+      'deleted' => false,
+    ),
+    'image' => array(
+      'field_name' => 'image',
+      // define the field type as image
+      'type' => 'image',
+      'label' => $t('Field for EKMOD module image'),
+        'settings' => array(
+          'uri_scheme' => 'public',
+          'default_image' => FALSE,
+        ),
+      'deleted' => false,
+    ),
+  );
+}
+/**
+* Return a structured array defining the field instances associated with this content type.
+*/
+function _ekmod_installed_instances() {
+$t = get_t();
+
+return array(
+  'safe_image' => array(
+    'field_name' => 'safe_image',
+    'entity_type' => 'ekmod',
+    'type' => 'image',
+    'bundle' => 'safe_image',
+    'label' => $t('Album field\'s instance'),
+    'widget' => array(
+      'type' => 'image_image',      
+    ),
+    'display' => array(
+      'ekmod_module_list' => array(
+        'label' => 'hidden',
+        'type' => 'image_image',
+      ),
+    ),
+   'no_ui' => TRUE,
+    'settings' => array(
+      'file_directory' => 'ekmod/field/image',
+      'file_extensions' => 'png gif jpg jpeg',
+      'max_filesize' => '',
+      'max_resolution' => '',
+      'min_resolution' => '',
+      'name_field' => TRUE,
+      'alt_field' => TRUE,
+      'title_field' => TRUE,
+    ),
+  ),
+  'image' => array(
+    'field_name' => 'image',
+    'entity_type' => 'ekmod',
+    'type' => 'image',
+    'bundle' => 'image',
+    'label' => $t('Album field\'s instance'),
+      'widget' => array(
+      'type' => 'image_image',
+  ),
+  'display' => array(
+    'ekmod_module_list' => array(
+      'label' => 'hidden',
+      'type' => 'image_image',
+    ),
+  ),
+  'no_ui' => TRUE,
+    'settings' => array(
+      'file_directory' => 'ekmod/field/image',
+      'file_extensions' => 'png gif jpg jpeg',
+      'max_filesize' => '',
+      'max_resolution' => '',
+      'min_resolution' => '',
+      'name_field' => TRUE,
+      'alt_field' => TRUE,
+      'title_field' => TRUE,
+    ),
+  ),
+);
+
+}
+
+function _ekmod_module_types() 
+{
+  $t = get_t();
+
+  return (object) array(
+    'ekmod_album_image' => (object) array
+    (
+      'type' => 'image',
+      'name' => $t('Image'),
+    //'base' => 'node_content',	//node_content - Naudoja "node" lentele
+    //'link_path' => 'node/add',
+      'description' => $t('Create image.'),
+      'locked' => 0,
+    //'body_label' => st('Album description'),
+      'title_label' => $t('Create image'),
+      'modified' => TRUE,
+      'custom' => TRUE,
+      'module' => 'ekmod',
+    //  'disabled' => 0,
+     ),
+    'ekmod_album_category_image' => (object) array
+    (
+      'type' => 'ekmod_album_category_image',
+      'name' => $t('(Video , Image) Album category'),
+    //'base' => 'node_content',		//node_content - Naudoja "node" lentele
+    //'path' => 'node/add',
+      'description' => $t('Create Category for (Flash, video, image)'),
+      'locked' => 0,
+    //'body_label' => st('Album category description'),
+      'title_label' => $t('Album category name'),
+      'modified' => TRUE,
+      'custom' => TRUE,
+      'module' => 'ekmod',
+    //  'disabled' => 0,
+     ),
+   );
+}

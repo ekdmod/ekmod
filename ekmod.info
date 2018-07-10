@@ -1,0 +1,9 @@
+name = EKMOD
+description = Edvino image's content gallery.
+core = 7.x
+files[] = ekmod.module
+files[] = ekmod.admin.inc
+files[] = ekmod.install
+files[] = ekmod.controller.inc
+configure = admin/config/media/ekmod
+

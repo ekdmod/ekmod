@@ -1,0 +1,125 @@
+.one-sidebar .image-content {
+/*
+ background-image: -moz-linear-gradient(center top , #99ccff 0%, #ffffcc 100%);
+*/
+   	filter: progid:DXImageTransform.Microsoft.gradient(startColorstr=#b5edda,endColorstr=#d9edea);
+   	padding: 20px 50px;
+	min-width: 1250px !important;
+/*
+  background-color: rgba(0, 0, 0, 0.9);
+*/
+  background-image: -moz-linear-gradient(top, #b5edda 0%, #d9edea 100%);
+  background-image: -ms-linear-gradient(top, #b5edda 0%, #d9edea 100%);
+  background-image: -o-linear-gradient(top, #b5edda 0%, #d9edea 100%);
+  background-image: -webkit-gradient(linear, left top, left bottom, color-stop(0, #b5edda), color-stop(1, #d9edea));
+  background-image: -webkit-linear-gradient(top, #b5edda 0%, #d9edea 100%);
+  background-image: linear-gradient(top, #b5edda 0%, #d9edea 100%);
+}
+
+#image-left {
+	background: url("sites/all/modules/ekmod/image/green_prev.png") no-repeat scroll 0 0 rgba(0, 0, 0, 0);    
+    display: block;
+    height: 55px;
+    left: 40px;
+    position: absolute;
+    top: 50%;
+    width: 35px;
+}
+	
+#image-right {
+	background: url("sites/all/modules/ekmod/image/green_prev.png") no-repeat scroll 0 0 rgba(0, 0, 0, 0);
+    height: 55px;    
+    position: absolute;
+    top: 50%;
+    width: 35px;
+	right: 30px;
+}
+
+div.end {
+	font-size: 0;
+	margin: 0;
+	height: 0;
+	clear: both;
+	width: 0;
+	padding: 0;
+}				
+	
+a.prev {
+	background-image: url("../../../../misc/icons/left.gif");    
+    display: inline-block;
+    position: absolute;
+    width: 30px;
+    top:53%;
+    height: 30px;
+    left: 45px;
+}		
+a.next {
+	background-image: url("../../../../misc/icons/right.jpg");    
+    display: inline-block;
+	background-size: 35px auto;
+	height: 40px;
+	top: 53%;
+	width: 35px;
+	position: absolute;
+}
+
+#blank_line {
+	position:relative;
+	top:2px;
+	/*
+		left:-10px;
+		width: 103%;
+	*/
+	background-color:white;
+	height: 30px;
+}
+
+#album_view {
+	display: inline-block;
+	text-align:center;
+	margin: 10px;
+}
+
+h1#album_data {
+	position: relative;
+	top: -32%;
+}
+
+.break-nav-right {
+	position: relative;
+	width: 5000px;
+	transition: left 0.5s ease 0s;
+}
+
+a#album_title {    
+    text-decoration: none;
+    text-transform: capitalize;
+    color: #16387C;
+    overflow: hidden;
+    position: relative;
+    top: -32%;
+    margin-right: 5px;
+	font: bold 17px/20px arial;
+}
+
+h1#album_data a#comment_count  {
+    background: none repeat scroll 0 0 transparent;
+    color: #900;
+    text-decoration: none;
+    font: bold 15px/20px arial;    
+}
+	
+#open_album {
+	display: inline-block;
+	text-align: center;
+	margin: 10px;
+}
+
+#image_logo {
+	text-align: center;
+}
+
+#cont-line {
+	clear: both;
+}
+

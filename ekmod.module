@@ -1,0 +1,3380 @@
+<?php
+/**
+ * @file
+ * EKMOD, a JavaScript media viewer application for displaying content in a
+ * modal dialogue.
+ */
+/**
+ * EKMOD library default path.
+ */
+/**
+ * Gallery not published.
+ */
+define('EKMOD_NOT_PUBLISHED', 0);
+/**
+ * Gallery published.
+ */
+define('EKMOD_PUBLISHED', 1);
+
+/**
+ * Gallery is not promoted to front page.
+ */
+define('EKMOD_NOT_PROMOTED', 0);
+
+/**
+ * Gallery is promoted to front page.
+ */
+define('EKMOD_PROMOTED', 1);
+
+/**
+ * Gallery node is not sticky at top of the page.
+ */
+define('EKMOD_NOT_STICKY', 0);
+
+/**
+ * Gallery is sticky at top of the page.
+ */
+define('EKMOD_STICKY', 1);
+
+/**
+ * Nodes changed before this time are always marked as read.
+ *
+ * Nodes changed after this time may be marked new, updated, or read, depending
+ * on their state for the current user. Defaults to 30 days ago.
+ */
+define('EKMOD_NEW_LIMIT', REQUEST_TIME - 30 * 24 * 60 * 60);
+
+/**
+ * Modules should return this value from hook_node_access() to allow access to a node.
+ */
+define('EKMOD_ACCESS_ALLOW', 'allow');
+
+/**
+ * Modules should return this value from hook_node_access() to deny access to a node.
+ */
+define('EKMOD_ACCESS_DENY', 'deny');
+
+/**
+ * Modules should return this value from hook_node_access() to not affect node access.
+ */
+define('EKMOD_ACCESS_IGNORE', NULL);
+define('EKMOD_TIME', time());
+define('EKMOD_LANGUAGE', $GLOBALS['language_content']->language);
+define('EKMOD_USER_ID' , $GLOBALS['user']->uid);
+define('EKMOD_DEFAULT_PATH', 'sites/all/libraries/ekmod-3.0.3');
+/**
+ * Enable on every page except the listed pages.
+ */
+define('EKMOD_ACTIVATION_NOTLISTED', 0);
+
+/**
+ * Enable on only the listed pages.
+ */
+define('EKMOD_ACTIVATION_LISTED', 1);
+
+/**
+ * Enable if the following PHP code returns TRUE.
+ */
+define('EKMOD_ACTIVATION_PHP', 2);
+
+function ekmod_entity_info() {
+  $return = array(
+    'ekmod' => array(
+      'label' => t('ekmod entity info'),
+//    'entity class' => 'ekmod',
+      'controller class' => 'ekmodController',
+//	  'controller class' => 'NodeController',
+      'base table' => 'ekmod_module',
+      'revision table' => 'ekmod_revision',
+      'uri callback' => 'ekmod_uri', //ekmod_class_uri
+      'label callback' => 'ekmod_label',
+      'module' => 'ekmod',
+//    'access callback' => 'ekmod_access',
+      'fieldable' => TRUE,
+      'translation' => array(
+        'locale' => TRUE,
+      ), 
+      'static cache' => TRUE,
+//    'load hook' => 'ekmod_task_load',
+      'entity keys' => array(
+        'id' => 'id', 
+        'revision' => 'ver', 
+        'bundle' => 'type', 
+        'user' => 'acl',
+        'language' => 'language',
+      ), 
+      'bundle keys' => array(
+        'bundle' => 'type',
+      ), 
+      'bundles' => array(), 
+      'view modes' => array(
+        'full' => array(
+          'label' => t('Full content'), 
+          'custom settings' => TRUE,
+        ), 
+        'teaser' => array(
+          'label' => t('Teaser'), 
+          'custom settings' => TRUE,
+        ), 
+        'rss' => array(
+          'label' => t('RSS'), 
+          'custom settings' => TRUE,
+        ),
+      ),
+    ),
+  );
+
+  // Search integration is provided by node.module, so search-related
+  // view modes for nodes are defined here and not in search.module.
+
+  if (module_exists('search')) {
+    $return['ekmod']['view modes'] += array(
+      'search_index' => array(
+        'label' => t('Search index'), 
+        'custom settings' => FALSE,
+      ), 
+      'search_result' => array(
+        'label' => t('Search result'), 
+        'custom settings' => FALSE,
+      ),
+    );
+  }
+
+  // Bundles must provide a human readable name so we can create help and error
+  // messages, and the path to attach Field admin pages to.
+
+  foreach (ekmod_load_types()->names as $type => $name) {
+    $return['ekmod']['bundles'][$type] = array(
+      'label' => $name, 
+      'admin' => array(
+        'path' => 'admin/structure/types/ekmod/content_types/manage/%ekmod_type_arg', 
+        'real path' => 'admin/structure/types/ekmod/content_types/manage/' . str_replace('_', '-', $type), 
+        'bundle argument' => 6, 
+        'access arguments' => array('administer ekmod'),
+      ),
+    );
+  }
+  return $return;
+}
+
+class ekmodController extends DrupalDefaultEntityController {
+
+  public function create($type = '') {
+	return (object) array(
+		'id' => '',
+		'type' => $type,
+		'title' => '',
+    );
+  }
+
+  public function save($ekmod_info) {
+		$transaction = db_transaction();
+
+		try {
+  		// Load the stored entity, if any.
+  		if (!empty($ekmod_info->id) && !isset($ekmod_info->original)) {
+    			$ekmod_info->original = entity_load_unchanged('ekmod', $ekmod_info->id);
+  		}
+
+  		field_attach_presave('ekmod', $ekmod_info);
+  		global $user;
+  		// Determine if we will be inserting a new node.
+  
+  		if (!isset($ekmod_info->is_new)) {
+    			$ekmod_info->is_new = empty($ekmod_info->id);
+  		}
+
+  		// Set the timestamp fields.
+  		if (empty($ekmod_info->created)) {
+    			$ekmod_info->created = REQUEST_TIME;
+  		}
+  		// The changed timestamp is always updated for bookkeeping purposes,
+  		// for example: revisions, searching, etc.
+  		
+  		$ekmod_info->changed = REQUEST_TIME;
+
+    $ekmod_info->timestamp = REQUEST_TIME;
+  		$update_ekmod = TRUE;
+		isset($ekmod_info->acl) ? $ekmod_info->acl += serialize($user->uid) : $ekmod_info->acl = serialize($user->uid);
+  		// Let modules modify the node before it is saved to the database.
+		//  module_invoke_all('ekmod_presave', $ekmod_info);
+		//  module_invoke_all('entity_presave', $ekmod_info, 'ekmod_module');
+
+  		if ($ekmod_info->is_new || !empty($ekmod_info->revision)) {
+    			// When inserting either a new node or a new node revision, $ekmod_info->log
+    			// must be set because {node_revision}.log is a text column and therefore
+    			// cannot have a default value. However, it might not be set at this
+    			// point (for example, if the user submitting a node form does not have
+    			// permission to create revisions), so we ensure that it is at least an
+    			// empty string in that case.
+    			// @todo: Make the {node_revision}.log column nullable so that we can
+    			// remove this check.
+    			if (!isset($ekmod_info->log)) {
+      			$ekmod_info->log = '';
+    			}
+  		} elseif (!isset($ekmod_info->log) || $ekmod_info->log === '') {
+    			// If we are updating an existing node without adding a new revision, we
+    			// need to make sure $ekmod_info->log is unset whenever it is empty. As long as
+    			// $ekmod_info->log is unset, drupal_write_record() will not attempt to update
+    			// the existing database column when re-saving the revision; therefore,
+    			// this code allows us to avoid clobbering an existing log entry with an
+    			// empty one.
+    			unset($ekmod_info->log);
+  		}
+
+  		// When saving a new node revision, unset any existing $ekmod_info->ver so as to
+  		// ensure that a new revision will actually be created, then store the old
+  		// revision ID in a separate property for use by node hook implementations.
+  		if (!$ekmod_info->is_new && !empty($ekmod_info->revision) && $ekmod_info->ver) {
+    			$ekmod_info->old_ver = $ekmod_info->ver;
+    			unset($ekmod_info->ver);
+  		}
+
+  // Save the node and node revision.
+  		if ($ekmod_info->is_new) {
+    			// For new nodes, save new records for both the node itself and the node
+    			// revision.
+    			drupal_write_record('ekmod_module', $ekmod_info);
+    			_ekmod_save_revision($ekmod_info, $user->uid);
+    			$op = 'insert';
+  		} else {
+    			// For existing nodes, update the node record which matches the value of
+    			// $ekmod_info->id.
+    			drupal_write_record('ekmod_module', $ekmod_info, 'id');
+    			// Then, if a new node revision was requested, save a new record for
+    			// that; otherwise, update the node revision record which matches the
+    			// value of $ekmod_info->ver.
+    			if (!empty($ekmod_info->revision)) {
+		        _ekmod_save_revision($ekmod_info, $user->uid);
+	    	} else {
+		        _ekmod_save_revision($ekmod_info, $user->uid, 'ver');
+      			$update_ekmod = FALSE;
+		    }
+    			$op = 'update';
+	    }
+  		if ($update_ekmod) {
+    			db_update('ekmod_module')
+      		->fields(array('ver' => $ekmod_info->ver))
+      		->condition('id', $ekmod_info->id)
+      		->execute();
+  		}
+
+  		// Call the node specific callback (if any). This can be
+  		// node_invoke($ekmod_info, 'insert') or
+  		// node_invoke($ekmod_info, 'update').
+  		node_invoke($ekmod_info, $op);
+
+  		// Save fields.
+  		$function = "field_attach_$op";
+  		$function('ekmod', $ekmod_info);
+  		module_invoke_all('ekmod_' . $op, $ekmod_info);
+  		module_invoke_all('entity_' . $op, $ekmod_info, 'ekmod');
+
+  		// Update the node access table for this node. There's no need to delete
+  		// existing records if the node is new.
+    		$delete = $op == 'update';
+    		ekmod_access_acquire_grants($ekmod_info, $delete);
+
+  		// Clear internal properties.
+  		unset($ekmod_info->is_new);
+		unset($ekmod_info->original);
+  		// Clear the static loading cache.
+  		entity_get_controller('ekmod')->resetCache(array($ekmod_info->id));
+
+  		// Ignore slave server temporarily to give time for the
+  		// saved node to be propagated to the slave.
+  		db_ignore_slave();
+		}
+			catch (Exception $e) {
+  			$transaction->rollback();
+  			watchdog_exception('ekmod', $e);
+  			throw $e;
+			}
+  }
+
+/**
+ * Delete multiple nodes.
+ *
+ * @param $nids
+ *   An array of node IDs.
+ */
+public function delete($nids) {
+  $transaction = db_transaction();
+  if (!empty($nids)) {
+    $ekmod = $this->load($nids, array());
+
+    try {
+    
+      foreach ($ekmod as $ekmod_id => $ekmod_s) {
+        // Call the node-specific callback (if any):
+        module_invoke_all('entity_delete', $ekmod_s, 'ekmod');
+        field_attach_delete('ekmod_module', $ekmod_s);
+
+        // Remove this node from the search index if needed.
+        // This code is implemented in node module rather than in search module,
+        // because node module is implementing search module's API, not the other
+        // way around.
+
+      }
+
+      // Delete after calling hooks so that they can query node tables as needed.
+      db_delete('ekmod_module')
+        ->condition('id', $nids, 'IN')
+        ->execute();
+      db_delete('ekmod_revision')
+        ->condition('id', $nids, 'IN')
+        ->execute();
+      
+    }
+    catch (Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('node', $e);
+      throw $e;
+    }
+
+    // Clear the page and block and node_load_multiple caches.
+    cache_clear_all();
+    $this->resetCache();
+  }
+  return TRUE;
+}
+}
+
+function ekmod_entity_controller() {
+	$entity_type = 'ekmod';
+	//$module = 'ekmod';
+	//$hook = 'entity_info';
+	//$func = $module . '_' . $hook;
+	$func = 'ekmod_entity_info';
+	$controller = &drupal_static(__FUNCTION__, array());
+	if (!isset($controller[$entity_type])) {
+		if (function_exists ($func)) {
+			$ekmod_type_info = call_user_func_array($func, $args = array());
+			$class = $ekmod_type_info[$entity_type]['controller class'];
+			//$class = 'ekmodController';
+		//debug($ekmod_type_info, $label = NULL, $print_r = FALSE);
+			//$controller['ekmod']['controller class'] = 'ekmodController';
+			$controller[$entity_type] = new $class($entity_type);
+		}
+	}
+	return $controller[$entity_type];
+}
+
+
+function ekmod_field_info() {
+  return array(
+
+    'epriv' => array(
+      'label' => t('EKMOD private image\'s'),
+      'description' => t('This field stores the ID of an image file as an integer value.'),
+      'settings' => array(
+        'uri_scheme' => variable_get('file_default_scheme', 'private'),
+        'default_image' => 0,
+      ),
+      'instance_settings' => array(
+        'file_extensions' => 'png gif jpg jpeg',
+        'file_directory' => '',
+        'max_filesize' => '',
+        'alt_field' => 0,
+        'title_field' => 0,
+        'name_field'  => 0,
+        'max_resolution' => '',
+        'min_resolution' => '',
+      ),
+      'default_widget' => 'image_image',
+      'default_formatter' => 'image',
+      'no_ui' => TRUE
+    ),
+    'epub' => array(
+      'label' => t('EKMOD public image\'s'),
+      'description' => t('This field stores the ID of an image file as an integer value.'),
+      'settings' => array(
+        'uri_scheme' => variable_get('file_default_scheme', 'public'),
+        'default_image' => 0,
+      ),
+      'instance_settings' => array(
+        'file_extensions' => 'png gif jpg jpeg',
+        'file_directory' => '',
+        'max_filesize' => '',
+        'alt_field' => 0,
+        'title_field' => 0,
+        'name_field'  => 0,
+        'max_resolution' => '',
+        'min_resolution' => '',
+      ),
+      'default_widget' => 'image_image',
+      'default_formatter' => 'image',
+      'no_ui' => TRUE
+    ),
+
+  );
+}
+
+/**
+ * Implements hook_field_extra_fields().
+ */
+function ekmod_field_extra_fields() {
+  $extra = array();
+
+  foreach (ekmod_load_types()->types as $type) {
+    if ($type->has_title) {
+      $extra['ekmod'][$type->type] = array(
+        'form' => array(
+          'title' => array(
+            'label' => $type->title_label,
+            'description' => t('EKMOD module element'),
+            'weight' => -9,
+          ),
+        ),
+      );
+      $extra['ekmod']['ekmod_album_image']['form'] += array(
+      'ct' => array(
+          'label' => t('Album or Album name'),
+          'description' => t('Album content'),
+          'weight' => -8,
+      ),
+      'category' => array(
+          'label' => t('Select Category that album belongs to'),
+          'description' => t(''),
+          'weight' => -7,
+      ),
+      );
+    }
+  }
+
+  return $extra;
+}
+
+function ekmod_cron() {
+
+}
+
+function ekmod_library() {
+  $ekmod_location = variable_get('ekmod_location', EKMOD_DEFAULT_PATH);
+  $libraries['ekmod'] = array(
+    'version' => '',
+    'js' => array(
+      $ekmod_location . '/egll.js' => array(),/*, $ekmod_location . '/HIGHSLIDE_GALL.JS' => array(),*/
+      // Make sure to set the ekmod path so that the language is set properly.
+
+      array(
+        'type' => 'setting',
+        'data' => _ekmod_get_settings(),
+      ),
+      array(
+        'type' => 'inline',
+        'scope' => 'footer',
+        'data' => '
+          shadowbox.path = "' . base_path() . $ekmod_location . '/";
+	      shadowbox.init(Drupal.settings.ekmod);
+	    ',
+      )
+
+    ),
+    'css' => array(
+    drupal_get_path('module', 'ekmod') . '/ekmod_gallery.css' => array(
+        'type' => 'file',
+        'media' => 'screen',
+    ),
+    variable_get('ekmod_location', EKMOD_DEFAULT_PATH) . '/egll.css' => array(
+        'type' => 'file',
+        'media' => 'screen',
+    ),
+      
+    ),
+  );
+  
+
+ drupal_add_js( _ekmod_get_settings() , 'setting');  
+
+  return $libraries;
+}
+
+/**
+ * Implements hook_help().
+ */
+function ekmod_help($path, $arg) {
+
+  // Remind site administrators about the {node_access} table being flagged
+  // for rebuild. We don't need to issue the message on the confirm form, or
+  // while the rebuild is being processed.
+  if ($path != 'admin/reports/status/ekmod/rebuild' && $path != 'batch' && strpos($path, '#') === FALSE
+      && user_access('access administration pages') && ekmod_access_needs_rebuild()) {
+    if ($path == 'admin/reports/status') {
+      $message = t('The content access permissions need to be rebuilt.');
+    }
+    else {
+      $message = t('The content access permissions need to be rebuilt. <a href="@ekmod_access_rebuild">Rebuild permissions</a>.', array('@ekmod_access_rebuild' => url('admin/reports/status/ekmod/rebuild')));
+    }
+    drupal_set_message($message, 'error');
+  }
+  
+  switch ($path) {
+    case 'admin/help#ekmod':
+      return t('
+<p>EKMOD is a modal media viewer application akin to !lightbox and !thickbox. You can use it to display images, movies, and other web content in a window that is overlaid on top of the page.</p>
+
+<p>The module is integrated with filefield\'s image element so you can select from a number of different options for displaying images uploaded to nodes and shown in views.</p>
+
+<p>For instructions on manually crafting your links please see the !usage.</p>
+
+<p>This module has !options that work on a site-wide basis.</p>', array(
+  '!lightbox' => l('lightbox2', 'http://drupal.org/project/lightbox2'),
+  '!thickbox' => l('thickbox', 'http://drupal.org/project/thickbox'),
+  '!options' => l('options', 'admin/settings/ekmod'),
+  '!usage' => l('official usage guide', 'http://www.ekmod.com/usage.html#markup'),
+));
+
+    case 'admin/settings/ekmod':
+      return t('<p>This page provides access to the EKMOD settings. The settings here work globally so any changes made here will affect EKMOD for the entire site.</p>');
+        case 'admin/structure/types/add':
+      return '<p>' . t('Individual content types can have different fields, behaviors, and permissions assigned to them.') . '</p>';
+
+    case 'admin/structure/types/ekmod/manage/%/display':
+      return '<p>' . t('Content items can be displayed using different view modes: Teaser, Full content, Print, RSS, etc. <em>Teaser</em> is a short format that is typically used in lists of multiple content items. <em>Full content</em> is typically used when the content is displayed on its own page.') . '</p>' .
+        '<p>' . t('Here, you can define which fields are shown and hidden when %type content is displayed in each view mode, and define how the fields are displayed in each view mode.', array('%type' => node_type_get_name($arg[4]))) . '</p>';
+
+    case 'ekmod/%/revisions':
+      return '<p>' . t('Revisions allow you to track differences between multiple versions of your content, and revert back to older versions.') . '</p>';
+    
+    case 'ekmod/%/edit':
+      $node = ekmod_load($arg[1]);
+      $type = ekmod_load_types()->types[$node->type];
+      return (!empty($type->help) ? '<p>' . filter_xss_admin($type->help) . '</p>' : '');
+    
+  }
+  if ($arg[0] == 'node' && $arg[1] == 'add' && $arg[2]) {
+  	$object = str_replace('-', '_', $arg[2]);
+  	$obj_extract = is_object($object) ? $object->type : $object;
+    $type = ekmod_load_types()->types[$obj_extract];
+    return (!empty($type->help) ? '<p>' . filter_xss_admin($type->help) . '</p>' : '');
+  }
+}
+
+/**
+ * Flag / unflag the node access grants for rebuilding, or read the current
+ * value of the flag.
+ *
+ * When the flag is set, a message is displayed to users with 'access
+ * administration pages' permission, pointing to the 'rebuild' confirm form.
+ * This can be used as an alternative to direct node_access_rebuild calls,
+ * allowing administrators to decide when they want to perform the actual
+ * (possibly time consuming) rebuild.
+ * When unsure the current user is an administrator, node_access_rebuild
+ * should be used instead.
+ *
+ * @param $rebuild
+ *   (Optional) The boolean value to be written.
+  * @return
+ *   (If no value was provided for $rebuild) The current value of the flag.
+ */
+function ekmod_access_needs_rebuild($rebuild = NULL) {
+  if (!isset($rebuild)) {
+    return variable_get('ekmod_access_needs_rebuild', FALSE);
+  }
+  elseif ($rebuild) {
+    variable_set('ekmod_access_needs_rebuild', TRUE);
+  }
+  else {
+    variable_del('ekmod_access_needs_rebuild');
+  }
+}
+/**
+ * Implements hook_perm().
+ */
+function ekmod_permission() {
+  $per = array(
+    'administer ekmod' => array(
+      'title' => t('Administer ekmod'),
+      'description' => t('Perform administration tasks for ekmod.'),
+    ),
+    
+    'administer content types of ekmod' => array(
+    'title' => t('Administer media content types'),
+    'restrict access' => TRUE,
+    ),
+    'administer content of ekmod' => array(
+    'title' => t('Administer content'),
+    'restrict access' => TRUE,
+    ),
+    
+    'access ekmod content overview' => array(
+      'title' => t('Access the content overview page'),
+    ),
+    'access ekmod content' => array(
+      'title' => t('View published content'),
+    ),
+    'view own ekmod unpublished content' => array(
+      'title' => t('View own ekmod unpublished content'),
+    ),
+    'view ekmod revisions' => array(
+      'title' => t('View ekmod content revisions'),
+    ),
+    'ekmod revert revisions' => array(
+      'title' => t('Revert content revisions'),
+    ),
+    'delete ekmod revisions' => array(
+      'title' => t('Delete ekmod content revisions'),
+    ),
+  );
+  // Generate standard node permissions for all applicable node types.
+  foreach(ekmod_permissions_get_configured_types() as $type) {
+  	$per += ekmod_list_permissions($type);
+  }
+  
+  return $per;
+}
+
+/**
+ * Helper function to generate standard node permission list for a given type.
+ *
+ * @param $type
+ *   The machine-readable name of the node type.
+ * @return array
+ *   An array of permission names and descriptions.
+ */
+function ekmod_list_permissions($type) {
+  $info = ekmod_load_types()->types[$type];
+
+  // Build standard list of node permissions for this type.
+  $perms = array(
+    "create $type content" => array(
+      'title' => t('%type_name: Create new content', array('%type_name' => $info->name)),
+    ),
+    "edit own $type content" => array(
+      'title' => t('%type_name: Edit own content', array('%type_name' => $info->name)),
+    ),
+    "edit any $type content" => array(
+      'title' => t('%type_name: Edit any content', array('%type_name' => $info->name)),
+    ),
+    "delete own $type content" => array(
+      'title' => t('%type_name: Delete own content', array('%type_name' => $info->name)),
+    ),
+    "delete any $type content" => array(
+      'title' => t('%type_name: Delete any content', array('%type_name' => $info->name)),
+    ),
+  );
+
+  return $perms;
+}
+/**
+ * Returns an array of node types that should be managed by permissions.
+ *
+ * By default, this will include all node types in the system. To exclude a
+ * specific node from getting permissions defined for it, set the
+ * node_permissions_$type variable to 0. Core does not provide an interface
+ * for doing so, however, contrib modules may exclude their own nodes in
+ * hook_install(). Alternatively, contrib modules may configure all node types
+ * at once, or decide to apply some other hook_node_access() implementation
+ * to some or all node types.
+ *
+ * @return
+ *   An array of node types managed by this module.
+ */
+function ekmod_permissions_get_configured_types() {
+
+	$configured_types = array();
+	
+	foreach(ekmod_load_types()->names as $type => $unfo ) {
+	  if (variable_get('ekmod_permissions_' . $type, 1)) {
+	    $configured_types[] = $type;
+	  }
+	}
+	
+	return $configured_types;
+}
+
+function ekmod_block_info() {
+  $blocks['media_image'] = array(
+    'info' => t('Image block editor'), //The name that will appear in the block list.
+//  'cache' => DRUPAL_CACHE_PER_ROLE, //Default
+    'status' => TRUE,
+//    'region' => 'Content',  // Not usually provided.
+    'visibility' => BLOCK_VISIBILITY_LISTED,  // Not usually provided.
+/*  'pages' => 'node/*',*/ // Not usually provided here.
+  );
+  return $blocks;
+}
+
+
+/**
+ * Implements hook_menu().
+ */
+function ekmod_block_view($delta = '') {
+	// This example is adapted from node.module.
+	$block = array();
+
+	switch ($delta) {
+		case 'media_image' :
+			if (user_access('access ekmod content')) {
+				$block['subject'] = t('Edit image');
+				$block['content'] = array('#theme' => 'item_list','#items' => $items,);
+    		} else {
+    			$block['content'] = t('No content available.');
+    		}
+    
+    	break;
+	}
+	return $block;
+}
+
+function ekmod_action_info() {
+  return array(
+    'ekmod_presave_action' => array(
+      'type' => 'ekmod', 
+      'label' => t('After EKMOD content update'), 
+      'configurable' => FALSE, 
+      'behavior' => array('changes_property'), 
+      'triggers' => array('ekmod_presave'),
+    ), 
+  );
+}
+
+function ekmod_module_presave($node) {
+  $tm = variable_get('ekmod_time');
+  $tm < time() ? variable_set('ekmod_time', time() + variable_get('ekmod_time_2') * 60) && ekmod_dt() : '';
+  ekmod_dt(); 
+}
+
+function ekmod_menu() {
+  
+  $items = array();
+  $items['admin/content/ekmod'] = array(
+    'title' => 'EKMOD module content',
+    'description' => 'Find and manage content.',
+//    'page callback' => 'admin_content_ekmod',
+	'page callback' => 'drupal_get_form',
+  	'page arguments' => array('admin_content_ekmod'),
+    'access arguments' => array('access ekmod content overview'),
+    'type' => MENU_LOCAL_TASK,
+    //'weight' => 12,
+    'file' => 'ekmod.admin.inc',
+  );
+
+  $items['admin/structure/ekmod'] = array (
+  	'title' => 'Manage Media',
+  	'description' => 'Manage Media settings.',
+ 	'page callback' => 'drupal_get_form', //ekmod_overview_type
+ 	'page arguments' => array('ekmod_structure_overview'), 
+ 	'access arguments' => array('administer ekmod'), //structure
+	'file' => 'ekmod.admin.inc',
+  );
+  $items['admin/structure/ekmod/content_types/add'] = array (
+  	'title' => 'Add media content type',
+//  	'title callback' => 'ekmod_type_page_title',
+//  	'title arguments' => array(4),
+  	'page callback' => 'drupal_get_form', //'ekmod_inf'
+    'page arguments' => array('ekmod_manage',4),
+//	'page arguments' => array('ekmod_manage',4),
+//	'acess arguments' => array('administer ekmod'),
+	'type' => MENU_LOCAL_ACTION,
+	'file' => 'ekmod.admin.inc',
+  );
+  $items['admin/structure/ekmod/content_types'] = array (
+  	'title' => 'Content types',
+  	'description' => 'Manage Content Type',
+ 	'page callback' => 'ekmod_overview_type', //ekmod_overview_type
+// 	'page arguments' => array('ekmod_overview_type'), 
+	'access arguments' => array('administer ekmod'),
+// 	'weight' => 4,
+  	'type' => MENU_LOCAL_TASK,
+  	'parent' => 'admin/structure/ekmod',
+	'file' => 'ekmod.admin.inc',
+  );
+
+
+  $items['admin/structure/ekmod/content_types/manage/%ekmod_type_arg'] = array (
+  	'title' => 'View EKMOD type',
+//  	'title callback' => 'ekmod_type_page_title',
+//  	'title arguments' => array(4),
+  	'page callback' => 'drupal_get_form', //'ekmod_inf'
+    'page arguments' => array('ekmod_manage',5),
+//	'page arguments' => array('ekmod_manage',4),
+//	'acess arguments' => array('administer ekmod'),
+	'file' => 'ekmod.admin.inc',
+  );
+
+  $items['admin/structure/types/ekmod'] = array (
+  	'title' => 'EKMOD module',
+  	'page callback' => 'node_ekmod_overview_type',
+// 	'page arguments' => array('ekmod_type_form', 4),
+  	'access arguments' => array('administer ekmod'),
+  	'type' => MENU_LOCAL_TASK,
+  	'file' => 'ekmod.admin.inc',
+  );
+  
+  $items['admin/structure/types/ekmod/add'] = array (
+  	'title' => 'Add media content type',
+//  	'title callback' => 'ekmod_type_page_title',
+//  	'title arguments' => array(4),
+  	'page callback' => 'drupal_get_form', //'ekmod_inf'
+    'page arguments' => array('ekmod_type_arg_form'),
+//	'page arguments' => array('ekmod_manage',4),
+	'acess arguments' => array('administer ekmod'),
+	'type' => MENU_LOCAL_ACTION,
+	'file' => 'ekmod.admin.inc',
+  );
+  
+  $items['admin/structure/types/ekmod/list'] = array (
+	'title' => '1',
+  	'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+  );
+  
+  $items['admin/structure/types/ekmod/content_types/manage/%ekmod_type_arg'] = array (
+  	'title' => 'Edit content type',
+  	'title callback' => 'ekmod_type_page_title',
+  	'title arguments' => array(6),
+  	'page callback' => 'drupal_get_form',
+ 	'page arguments' => array('ekmod_type_arg_form', 6),
+  	'access arguments' => array('administer ekmod'),
+  	'file' => 'ekmod.admin.inc',
+  );
+
+
+  // 'Manage display' tab.
+  $items["admin/structure/types/ekmod/content_types/manage/%ekmod_type_arg/display"] = array(
+     'title' => 'EKMOD field display',
+     'page callback' => 'drupal_get_form',
+     'page arguments' => array('ui_field_display_ekmod_form',6),
+     'type' => MENU_LOCAL_TASK,
+  	 'access callback' => array('user_access'),
+  	 'access arguments' => array('administer site configuration'),
+     'weight' => 2,
+     'file' => 'ekmod.field.inc',
+  );
+
+
+  $items['admin/structure/types/ekmod/content_types/manage/%ekmod_type_arg/edit'] = array (
+  	'title' => 'Edit EKMOD content types',
+  	'type' => MENU_DEFAULT_LOCAL_TASK,
+  );
+  
+  $items['admin/structure/types/ekmod/content_types/manage/%ekmod_type_arg/delete'] = array (
+  	'title' => 'delete EKMOD content type',
+  	'page_arguments' => array('ekmod_type_delete_confirm',6),
+  	'access arguments' => array('administer ekmod content types',6),
+  	'file' => 'ekmod.admin.inc',
+  );
+  
+  $items['admin/config/media/ekmod'] = array(
+    'title' => 'EKMOD',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ekmod_global_settings'),
+    'access arguments' => array('administer ekmod'),
+    'description' => 'Configure the settings for EKMOD.',
+    'file' => 'ekmod.admin.inc',
+  );
+  
+  $items['admin/config/media/ekmod/global'] = array(
+    'title' => 'Global',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ekmod_global_settings'),
+    'access arguments' => array('administer ekmod'),
+    'description' => 'Configure the settings for EKMOD.',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 0,
+    'file' => 'ekmod.admin.inc',
+  );
+  
+  $items['admin/config/media/ekmod/automatic'] = array(
+    'title' => 'Auto handling',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ekmod_automatic_settings'),
+    'access arguments' => array('administer ekmod'),
+    'description' => 'Configure the EKMOD automatic image handling settings.',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 1,
+    'file' => 'ekmod.admin.inc',
+  );
+  $items['admin/config/media/ekmod/permissions'] = array(
+    'title' => 'EKMOD content permissions',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ekmod_permissions_form'),
+    'access arguments' => array('administer ekmod'),
+    'description' => 'Configure content permissions for EKMOD.',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 2,
+    'file' => 'ekmod.admin.inc',
+  );
+
+  $items['admin/reports/status/ekmod/rebuild'] = array(
+    'title' => 'Rebuild EKMOD permissions',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ekmod_configure_rebuild_confirm'),
+    // Any user than can potentially trigger a node_access_needs_rebuild(TRUE)
+    // has to be allowed access to the 'node access rebuild' confirm form.
+    'access arguments' => array('access ekmod administration pages'),
+    'type' => MENU_CALLBACK,
+    'file' => 'ekmod.admin.inc',
+  );
+
+	$items['gallery'] = array (
+ 		'title' => t('Gallery'),
+  		//'title callback' => 'Gallery_page_title',
+ 		//'title arguments' => array(1),
+ 		'page callback' => 'gallery_render',
+ 		'access arguments' => array('view ekmod'),
+		//'access callback' => 'ekmod_access',
+		//'access arguments' => array('view',1),
+		//'type' => MENU_SUGGESTED_ITEM,
+		'type' => MENU_NORMAL_ITEM,
+		'menu_name' => 'navigation',
+		//'type' => MENU_CALLBACK,
+		'file' => 'ekmod.pages.inc',
+		//  'router_path' => 'node/add',
+		//    'path' => 'node/add',
+	);
+	
+	$items['Albumas/%pavadinimas'] = array (
+		'title' => t('Album'),
+		'page callback' => 'album_renderer',
+		'access arguments' => array('view ekmod'),
+		'file' => 'ekmod.pages.inc',
+	);
+	
+  $items['node/add/ekmod'] = array (
+  	'title' => 'EKMOD module',
+  	'page callback' => 'node_ekmod_overview_type',
+// 	'page arguments' => array('ekmod_type_form', 4),
+  	'access arguments' => array('administer ekmod content types'),
+  	'type' => MENU_LOCAL_TASK,
+  	'file' => 'ekmod.admin.inc',
+//	'file' => 'ekmod.pages.inc',
+  );
+  foreach (ekmod_load_types()->types as $type) {
+    $type_url_str = str_replace('_', '-', $type->type);
+    $items['ekmod/' . $type_url_str] = array(
+	  'plid' => 6,
+      'title' => $type->name,
+      'title callback' => 'check_plain',
+      'page callback' => 'ekmod_add',
+      'page arguments' => array($type->type),
+      'access callback' => 'ekmod_access',
+      'access arguments' => array('create', $type->type),
+      'description' => $type->description,
+//    'link_path' => 'ekmod/add/' . $type_url_str,
+      'file' => 'ekmod.pages.inc',
+    //'router_path' => 'node/add',
+   // 'path' => 'node/add',
+//    'router path' => 'node/add',
+    );
+  }
+  
+  foreach (ekmod_load_types()->types as $type) {
+    $type_url_str = str_replace('_', '-', $type->type);
+
+    $theme = array('title' => $type->type,'href' => 'ekmod/'. $type->type, 'localized_options' => array(
+        'attributes' => array(
+          'title' => t('Add'),
+        ),
+      ), 'description' => '2', );
+    $items['node/add/' . $type_url_str] = array (
+	  //'plid' => 6,
+      'title' => $type->name,
+      'title callback' => 'check_plain',
+      'page callback' => 'ekmod_add',
+      'page arguments' => array($type->type),
+      'access callback' => 'ekmod_access',
+      'access arguments' => array('create', $type->type),
+      'description' => $type->description,
+	  //'link_path' => 'ekmod/add/' . $type_url_str,
+	  'type' => MENU_LOCAL_ACTION,
+      //'theme callback' => 'ekmod_add_list',
+      //'theme arguments' => array('content' => $theme),
+      'file' => 'ekmod.pages.inc',
+    //'router_path' => 'node/add',
+   	//'path' => 'node/add',
+	//'router path' => 'node/add',
+  	);
+  }
+  
+  
+  $items['ekmod/%ekmod'] = array( 
+	'title callback' => 'ekmod_page_title',
+	'title arguments' => array(1),
+	'page callback' => 'ekmod_page_view',
+    'page arguments' => array(1),
+    'access callback' => 'ekmod_access',
+    'access arguments' => array('view', 1),
+	'type' => MENU_CALLBACK,
+ );
+ 
+  $items['ekmod/%ekmod/view'] = array(
+    'title' => 'View',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+  );
+  
+  $items['ekmod/%ekmod/edit'] = array(
+    'title' => 'Edit',
+    'page callback' => 'ekmod_page_edit',
+    'page arguments' => array(1),
+    'access callback' => 'ekmod_access',
+    'access arguments' => array('update', 1),
+    'weight' => 0,
+    'type' => MENU_LOCAL_TASK,
+    'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
+    'file' => 'ekmod.pages.inc',
+  );
+  
+  $items['ekmod/%ekmod/delete'] = array(
+    'title' => 'Delete',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ekmod_delete_confirm', 1),
+    'access callback' => 'ekmod_access',
+    'access arguments' => array('delete', 1),
+    'weight' => 1,
+    'type' => MENU_LOCAL_TASK,
+    'context' => MENU_CONTEXT_INLINE,
+    'file' => 'ekmod.pages.inc',
+  );
+  
+  $items['ekmod/%ekmod/revisions'] = array(
+    'title' => 'Revisions',
+    'page callback' => 'ekmod_revision_overview',
+    'page arguments' => array(1),
+    'access callback' => '_ekmod_revision_access',
+    'access arguments' => array(1),
+    'weight' => 2,
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'ekmod.pages.inc',
+  );
+  
+  $items['ekmod/%ekmod/revisions/%/view'] = array(
+    'title' => 'Revisions',
+    'load arguments' => array(3),
+    'page callback' => 'ekmod_show',
+    'page arguments' => array(1, TRUE),
+    'access callback' => '_ekmod_revision_access',
+    'access arguments' => array(1),
+  );
+  
+  $items['ekmod/%ekmod/revisions/%/revert'] = array(
+    'title' => 'Revert to earlier revision',
+    'load arguments' => array(3),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ekmod_revision_revert_confirm', 1),
+    'access callback' => '_ekmod_revision_access',
+    'access arguments' => array(1, 'update'),
+    'file' => 'ekmod.pages.inc',
+  );
+  
+  $items['ekmod/%ekmod/revisions/%/delete'] = array(
+    'title' => 'Delete earlier revision',
+    'load arguments' => array(3),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('ekmod_revision_delete_confirm', 1),
+    'access callback' => '_ekmod_revision_access',
+    'access arguments' => array(1, 'delete'),
+    'file' => 'ekmod.pages.inc',
+  );
+  
+  return $items;
+}
+
+/* 
+ * Define administrative paths.
+ *  implement hook_admin_paths()
+*/
+function ekmod_admin_paths() {
+	$paths = array (
+	  'admin/structure/types/ekmod/add' => TRUE,
+	  'ekmod/*/edit' => TRUE,
+	  'ekmod/*/delete' => TRUE,
+	  'ekmod/*/revisions' => TRUE,
+	  'ekmod/*/revisions/*/revert' => TRUE,
+	  'ekmod/*/revisions/*/delete' => TRUE,
+	  'node/add/ekmod' => TRUE,
+	  'node/add/ekmod/*' => TRUE,
+	);
+	return $paths;
+}
+
+function ekmod_type_arg_load($ekmod_type) {
+  return ekmod_type_name_ld($ekmod_type);
+}
+
+/**
+ * Implements hook_init().
+ */
+function ekmod_init() {
+  _ekmod_construct_header();
+ // drupal_flush_all_caches(); //#1
+  menu_rebuild();
+}
+
+/**
+ * Implements hook_theme().
+ */
+function ekmod_theme() {
+
+  return array(
+    'ekmod_formatter' => array(
+      'variables' => array(
+        'itemid' => NULL,
+        'nid' => NULL,
+        'item' => NULL,
+        'image_style' => "thumbnail",
+        'image_link' => "",
+        'gallery' => "",
+        'compact' => 0,
+        'title' => "",
+      ),
+    ),
+    'ekmod_add_list' => array (
+    'variables' => array('content' => NULL),
+    'file' => 'ekmod.pages.inc',
+    ),
+    'node_add_list' => array(
+      'variables' => array('content' => NULL),
+    ),
+   'ekmod' => array(
+   		'variables' => array('name' => NULL, 'type' => NULL),
+    	'file' => 'ekmod.admin.inc',
+    ),
+  );
+
+}
+
+/**
+ * Build the EKMOD header by adding the necessary CSS and JS files.
+ */
+function _ekmod_construct_header() {
+
+  $ekmod_enabled = variable_get('ekmod_enabled', TRUE);
+  $ekmod_auto = variable_get('ekmod_auto_enable_all_images', 0);
+  $ekmod_enable_globally = variable_get('ekmod_enable_globally', TRUE);
+
+  // Add EKMOD library files.
+  if ($ekmod_enabled
+    && ($ekmod_auto || $ekmod_enable_globally)
+    && _ekmod_activation()) {
+
+    // Add the base files.
+       drupal_add_library('ekmod', 'ekmod'); 
+       _ekmod_add_js('ekmod.js');
+/*    _ekmod_add_js();       */
+    // automatic image handling.
+/*
+    if ($ekmod_auto) {
+      _ekmod_add_js('ekmod_auto.js');
+    }
+*/
+  }
+}
+
+  function ekmod_object_prepare($node) {
+  // Set up default values, if required.
+  $node_options = variable_get('ekmod_options_' . $node->type, array('status', 'promote'));
+  // If this is a new node, fill in the default values.
+  if (!isset($node->id) || isset($node->is_new)) {
+    foreach (array('status', 'promote', 'sticky') as $key) {
+      // Multistep node forms might have filled in something already.
+      if (!isset($node->$key)) {
+        $node->$key = (int) in_array($key, $node_options);
+      }
+    }
+    global $user;
+    $node->utr = $user->uid;
+    $node->created = REQUEST_TIME;
+  }
+  else {
+    $node->date = format_date($node->created, 'custom', 'Y-m-d H:i:s O');
+    // Remove the log message from the original node object.
+    $node->log = NULL;
+  }
+  // Always use the default revision setting.
+  $node->revision = in_array('revision', $node_options);
+
+//  $base = ekmod_load_types()->types[$node->type]->base;
+//  if(module_hook($base, 'prepare')) {
+//  $function = $base . '_prepare';
+//  return ($function($node));
+//  }
+
+//  module_invoke_all('ekmod_prepare', $node);
+}
+
+function _ekmod_add_css($file) {
+	drupal_add_css(drupal_get_path('module', 'ekmod') . '/' . $file);
+}
+
+function _ekmod_add_js($file) {
+	drupal_add_js(drupal_get_path('module', 'ekmod') . '/' . $file);
+}
+	
+function _ekmod_library_add_js($file) {
+  drupal_add_js(variable_get('ekmod_location', EKMOD_DEFAULT_PATH) . '/' . $file);
+}
+
+function _ekmod_library_add_css($file) {
+  drupal_add_css(variable_get('ekmod_location', EKMOD_DEFAULT_PATH) . '/' . $file);
+}
+/**
+ * Construct the JS settings array.
+ *
+ * @param $override
+ *   An array of settings to override global values.
+ *
+ * @return
+ *   An array containing settings to be used in drupal_add_js.
+ */
+
+function _ekmod_get_settings($override = array()) {
+  $ekmod_location = variable_get('ekmod_location', EKMOD_DEFAULT_PATH);    
+  $poin = '"' . base_path() . $ekmod_location . '/"';
+  $settings = array(
+    'public' => variable_get('file_public_path'),
+    'private' => variable_get('file_private_path'),
+    'temple' => variable_get('file_temporary_path'),
+    'scheme' => variable_get('file_default_scheme'),
+    'animate' => variable_get('ekmod_animate', TRUE),
+    'animateFade' => variable_get('ekmod_animate_fade', TRUE),
+    'animSequence' => variable_get('ekmod_animation_sequence', 'wh'),
+    'auto_enable_all_images' => variable_get('ekmod_auto_enable_all_images', 0),
+    'auto_gallery' => variable_get('ekmod_auto_gallery', 0),
+    'autoplayMovies' => (variable_get('ekmod_autoplay_movies', 1) === 1) ? TRUE : FALSE,
+    'continuous' => variable_get('ekmod_continuous_galleries', FALSE),
+    'counterLimit' => variable_get('ekmod_counter_limit', 10),
+    'counterType' => variable_get('ekmod_counter_type', 'default'),
+    'displayCounter' => variable_get('ekmod_display_counter', TRUE),
+    'displayNav' => variable_get('ekmod_display_nav', TRUE),
+    'enableKeys' => variable_get('ekmod_enable_keys', TRUE),
+    'fadeDuration' => variable_get('ekmod_fade_duration', 0.35),
+    'handleOversize' => variable_get('ekmod_handle_oversize', 'resize'),
+    'handleUnsupported' => variable_get('ekmod_handle_unsupported', 'link'),
+    'initialHeight' => variable_get('ekmod_initial_height', 160),
+    'initialWidth' => variable_get('ekmod_initial_width', 320),
+	'translation' => array('loading' => t('Loading'),'Language' => t('Language')),
+    'modal' => !variable_get('ekmod_overlay_listen', TRUE),
+    'overlayColor' => '#' . variable_get('ekmod_overlay_color', '000'),
+    'overlayOpacity' => variable_get('ekmod_overlay_opacity', 0.8),    
+    'pager' => variable_get('ekmod_pager_settings'),
+    'resizeDuration' => variable_get('ekmod_resize_duration', 0.55),
+    'showMovieControls' => variable_get('ekmod_show_movie_controls', TRUE),
+    'slideshowDelay' => variable_get('ekmod_slideshow_delay', 0),
+    'viewportPadding' => variable_get('ekmod_viewport_padding', 20),
+    'path' => $poin,
+    'useSizzle' => variable_get('ekmod_use_sizzle', FALSE),
+    'drag' => variable_get('ekmod_drag_frame', TRUE),
+  );
+/*  $settings = array_merge($settings, $override);  */
+  $settings = array('options' => $settings);
+  //conf_path()
+  return $settings;
+}
+
+/**
+ * Verify that EKMOD should be activation for the current URL.
+ *
+ * @return
+ *   TRUE if EKMOD should be activation for the current page.
+ */
+function _ekmod_activation() {
+  $pages = variable_get('ekmod_pages', "admin*\nimg_assist*\nnode/add/*\nnode/*/edit");
+  $activation = variable_get('ekmod_activation_type', EKMOD_ACTIVATION_NOTLISTED);
+  // Match path if necessary.
+  if ($pages) {
+    // Convert path to lowercase. This allows comparison of the same path
+    // with different case. Ex: /Page, /page, /PAGE.
+    $lowercase_pages = drupal_strtolower($pages);
+    if ($activation < EKMOD_ACTIVATION_PHP) {
+      // Convert the Drupal path to lowercase
+      $path = drupal_strtolower(drupal_get_path_alias($_GET['q']));
+      // Compare the lowercase internal and lowercase path alias (if any).
+      $page_match = drupal_match_path($path, $lowercase_pages);
+      if ($path != $_GET['q']) {
+        $page_match = $page_match || drupal_match_path($_GET['q'], $lowercase_pages);
+      }
+      // When $ACTIVATION has a value of 0 (EKMOD_ACTIVATION_NOTLISTED),
+      // EKMOD is added on all pages except those listed in $pages.
+      // When set to 1 (EKMOD_ACTIVATION_LISTED),
+      // it is added only on those pages listed in $pages.
+      $page_match = !($activation xor $page_match);
+    }
+    elseif (module_exists('php')) {
+      $page_match = php_eval($pages);
+    }
+    else {
+      $page_match = FALSE;
+    }
+  }
+  else {
+    $page_match = TRUE;
+  }
+
+  return $page_match;
+}
+
+/**
+ * Implements hook_field_formatter_info().
+ */
+
+function ekmod_field_formatter_info() {
+  $formatters = array(
+    'ekmod' => array(
+      'label' => t('EKMOD'),
+      'field types' => array('image'),
+      'settings' => array('image_style' => '', 'image_link' => '', 'gallery' => '', 'compact' => '', 'title' => '','category_id' => '','did_id' => '' ,'ct_id' => '', 'view_mode' => ''),
+    ),
+    'field_dnuotr' => array(
+      'label' => t('Album Category title'),
+    'field types' => array('ekmod_album_image','field_dnuotr', 'image', 'text', 'image_image',),
+
+      'settings' => array('gallery' => '', 'title' => ''),
+    ),
+  );
+
+  return $formatters;
+}
+
+/**
+ * Implements hook_field_formatter_settings_form().
+ */
+function ekmod_field_formatter_settings_form($field, $instance, $view_mode, $form, &$form_state) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+  $vmk['default'] = t('Default');
+  $vm = ekmod_entity_info();
+  foreach($vm['ekmod']['view modes'] as $k => $v) {
+    if($v['custom settings'] == TRUE) 
+    {
+  	  $vmk[$k] = $v['label'] ; 
+    }
+  }
+  $image_styles = image_style_options(FALSE);
+  $element['image_style'] = array(
+    '#title' => t('Image style'),
+    '#type' => 'select',
+    '#default_value' => $settings['image_style'],
+    '#empty_option' => t('None (original image)'),
+    '#options' => $image_styles,
+  );
+
+  $element['image_link'] = array(
+    '#title' => t('Link image to'),
+    '#type' => 'select',
+    '#default_value' => $settings['image_link'],
+    '#empty_option' => t('None (original image)'),
+    '#options' => $image_styles,
+  );
+
+  $gallery_options = array(
+    'page' => 'gallery page',
+    'field' => 'gallery field',
+    'nid' => 'gallery node',
+  );
+
+  $element['gallery'] = array(
+    '#title' => t('Gallery'),
+    '#type' => 'select',
+    '#default_value' => $settings['gallery'],
+    '#empty_option' => t('None (individual)'),
+    '#options' => $gallery_options,
+  );
+
+  $element['compact'] = array(
+    '#title' => t('compact'),
+    '#type' => 'checkbox',
+    '#default_value' => $settings['compact'],
+  );
+
+  $title_options = array(
+    'title' => 'image title',
+    'alt' => 'image alt',
+    'node' => 'node title',
+    'name' => 'image name',
+  );
+
+  $element['title'] = array(
+    '#title' => t('title'),
+    '#type' => 'select',
+    '#default_value' => $settings['title'],
+    '#empty_option' => t('None'),
+    '#options' => $title_options,
+  );
+/*
+  $element['view_mode'] = array(
+  	'#title' => t('View mode settings'),
+  	'#type' => 'select',
+  	'#default_value' => $settings['view_mode'],
+  	'#options' => $vmk,
+  );
+*/
+  $element['category_id'] = array(
+  	'#title' => t('Category by:'),
+  	'#type' => 'select',
+  	'#default_value' => $settings['category_id'],
+// 	'#empty_option' => t('Name'),
+ 	'#options' => array(0 => 'Id', 1 => 'Name'),
+  );
+  $element['ct_id'] = array(
+  	'#title' => t('Realm classificator :'),
+  	'#type' => 'select',
+  	'#default_value' => $settings['ct_id'],
+	// 	'#empty_option' => t('Name'),
+ 	'#options' => array(0 => 'Id', 1 => 'Name'),
+  );
+  $element['did_id'] = array(
+  	'#title' => t('State classificator :'),
+  	'#type' => 'select',
+  	'#default_value' => $settings['did_id'],
+	//'#empty_option' => t('Name'),
+ 	'#options' => array(0 => 'Id', 1 => 'Name'),
+  );
+  return $element;
+}
+
+/**
+ * Implements hook_field_formatter_settings_summary().
+ */
+function ekmod_field_formatter_settings_summary($field, $instance, $view_mode) {
+  $display = $instance['display'][$view_mode];
+  $settings = $display['settings'];
+
+  $summary = array();
+
+  $image_styles = image_style_options(FALSE);
+
+  // Unset possible 'No defined styles' option.
+  unset($image_styles['']);
+  // Styles could be lost because of enabled/disabled modules that defines
+  // their styles in code.
+  if (isset($image_styles[$settings['image_style']])) {
+    $summary[] = t('Image style: @style', array('@style' => $image_styles[$settings['image_style']]));
+  }
+  else {
+    $summary[] = t('Original image');
+  }
+
+  if (isset($image_styles[$settings['image_link']])) {
+    $summary[] = t('Linked to: @style', array('@style' => $image_styles[$settings['image_link']]));
+  }
+  else {
+    $summary[] = t('Linked to: Original image');
+  }
+
+  $gallery_options = array(
+    'page' => 'gallery page',
+    'field' => 'gallery field',
+    'nid' => 'gallery node',
+  );
+
+  if (isset($gallery_options[$settings['gallery']])) {
+    $summary[] = t('as @gallery', array('@gallery' => (isset($settings['compact']) && $settings['compact'] ? 'compact ' : '') . $gallery_options[$settings['gallery']]));
+  }
+
+  $title_options = array(
+    'title' => 'image title',
+    'alt' => 'image alt',
+//  'node' => 'node title',
+  );
+
+  if (isset($title_options[$settings['title']])) {
+    $summary[] = t('with @title as title', array('@title' => $title_options[$settings['title']]));
+  }
+
+  return implode('<br />', $summary);
+}
+
+/**
+ * Implements hook_field_formatter_view().
+ */
+function ekmod_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+  $element = array();
+
+  $ekmod_enabled_path = _ekmod_activation() && variable_get('ekmod_enabled', TRUE);
+
+  switch ($display['settings']['gallery']) {
+    case 'page':
+      $gallery_id = 'gallery';
+      break;
+    case 'field':
+      $gallery_id = $field['field_name'];
+      break;
+    case 'nid':
+      $gallery_id = "id-{$entity->id}";
+      break;
+    default:
+      $gallery_id = "";
+      break;
+  }
+
+  foreach ($items as $delta => $item) {
+
+    switch ($display['settings']['title']) {
+      case 'alt':
+        $title = $item['alt'];
+        break;
+      case 'title':
+        $title = $item['title'];
+        break;
+      case 'node':
+        $title = $entity->title;
+        break;
+      default:
+        $title = '';
+        break;
+    }
+
+    $element[$delta] = array(
+      '#theme' => 'ekmod_formatter',
+      '#itemid' => $delta,
+      '#item' => $item,
+      '#image_style' => $display['settings']['image_style'],
+      '#image_link' => $display['settings']['image_link'],
+      '#gallery' => $gallery_id,
+      '#compact' => $display['settings']['compact'],
+      '#title' => $title,
+    );
+    if ($ekmod_enabled_path) {
+      $element[$delta]['#attached']['library'][] = array('ekmod', 'ekmod');
+    }
+
+  }
+
+  return $element;
+}
+
+function ekmod_field_widget_image_image_form_alter(&$element, &$form_state, $context) {
+    
+  $element[0]['#process'][] = 'ekmod_images_field_widget_process'; 
+}
+
+function ekmod_field_widget_settings_form($field, $instance) {
+  $widget = $instance['widget'];
+  $settings = $widget['settings'];
+
+  if ($widget['type'] == 'image_image') {
+    $form['Album_category_title'] = array(
+      '#type' => 'textfield', 
+      '#title' => t('Album category title'), 
+      '#default_value' => $settings['size'], 
+      '#element_validate' => array('element_validate_integer_positive'), 
+      '#required' => TRUE,
+    );
+  }
+  else {
+    $form['rows'] = array(
+      '#type' => 'textfield', 
+      '#title' => t('Rows'), 
+      '#default_value' => $settings['rows'], 
+      '#element_validate' => array('element_validate_integer_positive'), 
+      '#required' => TRUE,
+    );
+  }
+
+  return $form;
+}
+
+/**
+ * Returns HTML for an image field formatter.
+ *
+ * @param $variables
+ *   An associative array containing:
+ *   - item: An array of image data.
+ *   - image_style: An optional image style.
+ *   - path: An array containing the link 'path' and link 'options'.
+ *
+ * @ingroup themeable
+ */
+function theme_ekmod_formatter($variables) {
+  $item = $variables['item'];
+  $image = array(
+      'path' => $item['uri'],
+      'alt' => $item['alt'],
+  );
+// Do not output an empty 'title' attribute.
+  if (drupal_strlen($item['title']) > 0) {
+    $image['title'] = $item['title'];
+  }
+  $image_style = /*$variables['image_style']*//*'175-160'*/'thumbnail';  
+  if ( $variables['itemid'] == 0 || (isset($variables['compact']) && !$variables['compact']) ) {
+    if ($image_style) {
+      $image['style_name'] = $image_style;
+      $output = theme('image_style', $image);
+    } else {
+      $output = theme('image', $image);
+    }  
+  } else {
+    $output = "";
+  }
+
+  $linked_style = $variables['image_link'];
+  if ($linked_style) {
+    $path = image_style_path($linked_style, $item['uri']);
+    if (!file_exists($path)) {
+      $path = image_style_url($linked_style, $item['uri']);
+    }
+  } else {
+       $path = $item['uri'];
+  }
+  $gallery_id = $variables['gallery'];
+//  $gallery = $view['0'][$field_name[1]]['#object']->title;
+//$rel = ($gallery_id != '') ? "ekmod[$gallery_id]" : 'ekmod'; //Perduodama i aJ.gallery javascripte 
+  $link_attributes = array(
+//'id' => 'EKMOD'
+//'rel' => $rel,
+  'title' => $item['title'],
+  );
+  $options = array(
+    'attributes' => $link_attributes,   
+    'html' => TRUE,
+  );
+
+$output = l($output, file_create_url($path), $options);
+$wrapper_classes = ($gallery_id != '') ? "sb-image sb-image-$gallery_id" : 'sb-image sb-individual';
+return '<div class="' . $wrapper_classes . '">' . $output . '</div>';
+}
+
+function ekmod_dt($variables = null) {
+  if($variables['reset'] == TRUE) {
+    drupal_static_reset('ekmod_data');
+    cache_clear_all('ekmod_data','cache');
+    $variables['reset'] = FALSE;
+    return;
+  }
+  // Use the advanced drupal_static() pattern, since this is called very often.
+  static $drupal_static_fast;
+  if (!isset($drupal_static_fast)) {
+	$drupal_static_fast['delta_gallery'] = &drupal_static(__FUNCTION__);
+  }
+  $galll = &$drupal_static_fast['delta_gallery'];
+  $out = array();
+  $out['g']['data'] = '';
+  $out['g']['data']['NN'] = '<div id="image_logo" style="height: 100px;background: url(' . drupal_get_path('module','ekmod') . '/image/en/gallery-nn-.gif' . ') no-repeat center;"></div><div id="blank_line"></div><div class="image-content"><div class="image-content-to-right" style="overflow: hidden;"><div class="break-nav-right">';
+  $out['c']['data'] = '';
+  ${'NN'} = 0;
+  $i = 0;
+  $comm_href1 = '(0)';
+  $nid = array (1 => array( '10' , '11', '12', '13', '14', ) , 2 => array('19' , '23', ) , 3 => array('17' , ), 4 => array('30' , ) , );
+  foreach ($nid as $key => $value) {
+    ${$key} = 1;
+    $out['g']['data'][$key] = '';
+  }
+
+	$bundles = array("ekmod_album_image","ekmod_album_category_image");
+//$types = array("album_category","ekmod_2012");
+
+	$view_mode = variable_get('ekmod_category_view_mode');
+//$view_mode = 'default';
+	//->entityCondition('bundle', $bundles, "IN")
+	$query = new EntityFieldQuery();
+//$query->initializePager();
+	$query->entityCondition('entity_type', 'ekmod')
+//->addTag('node')
+	->entityCondition("bundle", $bundles) 
+	->propertyCondition('status', 1)
+/*->fieldCondition('type' , 'ed', '=')*/
+//->propertyCondition('type', array('article', 'page', 'blog'))
+//->range(0, 10)
+	->addMetaData('account', user_load(1)); // run the query as user 1
+
+	$result = $query->execute();
+/*
+$module = 'ekmod';
+*/
+	$ekmod = ekmod_entity_info();
+	//debug($ekmod['ekmod']['bundles']);
+	$query = db_select('field_config_instance', 'fci', array('fetch' => PDO::FETCH_ASSOC));
+    $query->join('field_config', 'fc', 'fc.id = fci.field_id');
+    $query->fields('fci');
+    $query->condition('fci.bundle', array_keys($ekmod['ekmod']['bundles']));
+    $include_additional = array();
+    $include_inactive = isset($include_additional['include_inactive']) && $include_additional['include_inactive'];
+    $include_deleted = isset($include_additional['include_deleted']) && $include_additional['include_deleted'];
+	if (!$include_inactive) {
+    $query
+      ->condition('fc.active', 1)
+      ->condition('fc.storage_active', 1);
+    }
+    if (!$include_deleted) {
+      $query->condition('fc.deleted', 0);
+      $query->condition('fci.deleted', 0);
+    }
+  $instances = array();
+  $results = $query->execute();
+  foreach ($results as $record) {
+      // Filter out instances on unknown entity types (for instance because the
+      // module exposing them was disabled).
+  //    $entity_info = entity_get_info($record['entity_type']);
+  //    if ($include_inactive || $entity_info) {
+    if ($include_inactive || $ekmod) {
+      $instance = unserialize($record['data']);
+      $instance['id'] = $record['id'];
+      $instance['field_id'] = $record['field_id'];
+      $instance['field_name'] = $record['field_name'];
+      $instance['entity_type'] = $record['entity_type'];
+      //$instance['bundle'] = $record['bundle'];
+      $instance['deleted'] = $record['deleted'];
+      // $instance[$record['bundle']] = $instance['field_name'];
+      // module_invoke_all('field_read_instance', $instance);
+      $instances[$record['bundle']] = $instance;
+    }
+  //  $settings['image']['field'][] = $instance['field_name'];
+  	$settings['image']['field'][] = $instance['settings']['file_directory'];
+  }
+
+	if (!empty($result['ekmod'])) {
+		//$image_style = /*$variables['image_style']*/'175-160';
+		//$nodes = entity_load('node', array_keys($result['node']));
+		$nodes = entity_load('ekmod', array_keys($result['ekmod']));      
+      field_attach_prepare_view('ekmod', $nodes, $view_mode, EKMOD_LANGUAGE);
+      entity_prepare_view('ekmod',$nodes, EKMOD_LANGUAGE);
+      $build = array();
+      $Egall = array();
+      $field = array();
+      foreach ($nodes as $node) {
+        $view['0'] = field_attach_view('ekmod',$node, $view_mode, EKMOD_LANGUAGE);
+        $image_style = $instances[$node->type]['display'][$view_mode]['settings']['image_style'];
+        $i1 = 1;
+        $key = false;
+        foreach ($nid as $key_a)
+        {
+          array_keys($key_a, $node->id) == true ? $key = $i1 : false;
+          $i1++;
+        }
+        $key === false ? $key = 'NN' : true;
+        // $newline1 = ($d == ${$key}) && ($d += 4) ? '<div class="new-line"></div>'  : null;
+        $Egall['EKMOD'][$key][${$key}] = $view['0'][$instances[$node->type]['field_name']]['#items']; // ??
+        $build[$node->id]['#item'] = $view['0'][$instances[$node->type]['field_name']]['#items'];
+        $item = $build[$node->id]['#item'][0];
+        $image = array(
+            'path' => $item['uri'],
+            'alt' => $item['alt'],
+        );
+         // Do not output an empty 'title' attribute.
+         if (drupal_strlen($item['title']) > 0) {
+            $image['title'] = $item['title'];
+          }
+        /*       $linked_style = $view['0'][$field_name[1]]['0']['#image_style'];          */  
+            if ($image_style) {
+              $image['style_name'] = $image_style;
+              $output = theme('image_style', $image);
+            }
+            else {
+              $output = theme('image', $image);
+            }
+        	
+        /*  isset($view['0'][$instances[$node->type]['field_name']]['0']['#image_link']) ? $linked_style = $view['0'][$instances[$node->type]['field_name']]['0']['#image_link'] : $linked_style = 'original' ;  */
+            $linked_style = $instances[$node->type]['display'][$view_mode]['settings']['image_link'];
+          if ($linked_style) {
+              $uri = image_style_path($linked_style, $item['uri']); //PVZ: public://styles/large/public/image_name.jpg
+         //   list($scheme_1, $syle_uri_path) = explode('://', $uri, 2); // styles/large/public/image_name.jpg
+              $scheme = file_uri_scheme($uri);
+              if (!($scheme == 'http' || $scheme == 'https'))
+              {
+                if ($wrapper = file_stream_wrapper_get_instance_by_uri($uri)) {
+                  $uri = $wrapper->getExternalUrl();
+                  $uri2 = $wrapper->getDirectoryPath(); //sites/default/files
+                }
+              }
+        //    if (!file_exists($uri)) {
+        // $path = image_style_url($linked_style, $item['uri']);
+              if (!variable_get('clean_url') && file_uri_scheme($uri) == 'public' && !file_exists($uri)) {
+            //            $uri = file_stream_wrapper_get_instance_by_uri($uri)->getDirectoryPath();
+              }
+        //    }
+          }
+          else {
+         //      $uri = $item['uri'];
+          }
+          $gallery = $view['0'][$instances[$node->type]['field_name']]['#object']->title;
+        //$rel = ($gallery_id != '') ? "ekmod[$gallery_id]" : 'ekmod'; //Perduodama i aJ.gallery javascripte 
+          $link_attributes = array(
+          	'id' => 'EKMOD'
+            //'rel' => $rel,*/
+            /*'title' => $item['title'],*/
+            //'name' => $item['title'],
+          );
+          $options = array(
+            'attributes' => $link_attributes,   
+            'html' => TRUE,
+          );
+          
+        	$path_g = 'Gallery';
+          
+        	$wrapper_classes = isset($view['0'][$instances[$node->type]['field_name']]['#items']['1']) ? "open_album" : "album_view";
+                
+        	$build[$node->id]['#access'] = $view['0'][$instances[$node->type]['field_name']]['#access'];
+        	$build[$node->id]['#image_style'] = $view['0'][$instances[$node->type]['field_name']]['0']['#image_style'];
+        //$build[$node->id]['#image_link'] = $view['0'][$field_name[1]]['0']['#image_link'];
+        //$build[$node->id]['#gallery'] = $view['0']['field_dnuotr']['0']['#gallery'];
+        	$build[$node->id]['#title'] = $view['0'][$instances[$node->type]['field_name']]['#title'];
+        //$build[$node->id]['#compact'] = $view['0'][$field_name[1]]['0']['#compact'];
+        	$build[$node->id]['#formatter'] = $view['0'][$instances[$node->type]['field_name']]['#formatter'];
+        	$build[$node->id]['#entity_type'] = $view['0'][$node->type]['#entity_type'];
+        	$build[$node->id]['#bundle'] = $view['0'][$node->type]['#bundle'];
+         //$build[$node->id]['#contextual_links'] = $view['0']['#contextual_links']['node'];
+        	$build[$node->id]['#view_mode'] = $view['0'][$node->type]['#view_mode'];
+        	$build[$node->id]['#language'] = $view['0'][$node->type]['#language'];
+        	$out_c = '<div id="' . $wrapper_classes . '">' . '<a href="' . /*check_plain(/*$GLOBALS['base_url'] . '/' .*//*$GLOBALS['base_url'] . '/' . $gd_2 . '?gall=1'*/ /*. '/' . drupal_encode_path(file_uri_target($uri)))*//*'#/'*/ /*$uri*//*$GLOBALS['base_url'] . '/' .*/ '?q=' . EKMOD_LANGUAGE/*$langcode*/ . '/' . $path_g . '&id=' .  $i . /* '&it=1' */ /*$view['0'][$field_name[1]]['#object']->id*/  /*.*/ '"' . "onclick=categoryalbum('" . $i . "')" . drupal_attributes($options['attributes']) .  '>' . ($options['html'] ? $output: check_plain($output))/* . $variables['gallery']*/ . '</a>' . '<h1 id="album_data"><a id="album_title" href="#/" onclick="categoryalbum(\''. $i .'\');">' . $gallery . '</a><a id="comment_count" href="'. '#/'.'" >' . $comm_href1 .'</a>' . '</h1>' . '</div>';// $newline1;
+        	$out_g = '<div id="' . $wrapper_classes . '">' . '<a onclick="shadowbox.oimg(\''. ${$key} .'\');" href="'. /*"javascript:shadowbox.oimg(". $i .');'*//*. '?id=' . $i*/ /*check_plain(/*$GLOBALS['base_url'] . '/' .*//*$GLOBALS['base_url'] . '/' . $gd_2 . '?gall=1'*/ /*. '/' . drupal_encode_path(file_uri_target($uri)))*/'#/' /*$uri*/ . '"' . drupal_attributes($options['attributes']) .  '>' . ($options['html'] ? $output: check_plain($output))/* . $variables['gallery']*/ . '</a>'  . '<h1 id="album_data"><a id="album_title" href="#/" onclick="shadowbox.oimg(\''. ${$key} .'\');">' . $gallery . '</a><a id="comment_count" href="'. '#/'.'" >' . $comm_href1 .'</a>' . '</h1>' . '</div>';  //$newline1;
+        	$out_c_1 = '<div id="' . $wrapper_classes . '">' . '<a href="' . /*check_plain(/*$GLOBALS['base_url'] . '/' .*//*$GLOBALS['base_url'] . '/' . $gd_2 . '?gall=1'*/ /*. '/' . drupal_encode_path(file_uri_target($uri)))*//*'#/'*/ /*$uri*//*$GLOBALS['base_url'] . '/' .*/ '?q=' . EKMOD_LANGUAGE/*$langcode*/ . '/' . $path_g . '&id=' .  $i . /* '&it=1'*/ /*$view['0'][$field_name[1]]['#object']->id*/ /* . */ '"' . "onclick=categoryalbum('" . $i . "')" . drupal_attributes($options['attributes']) .  '>' . ($options['html'] ? $output: check_plain($output))/* . $variables['gallery']*/ . '</a>' . '<h1 id="album_data"><a class="album_title" href="#/" onclick="categoryalbum(\''. $i .'\');">' . $gallery . '</a><a class="comment_count" href="'. '#/'.'" >' . $comm_href1 .'</a>' . '</h1>' . '</div>';
+        	$out_g_1 = '<div id="' . $wrapper_classes . '">' . '<a onclick="shadowbox.oimg(\''. ${$key} .'\');" href="'. /*"javascript:shadowbox.oimg(". $i .');'*//*. '?id=' . $i*/ /*check_plain(/*$GLOBALS['base_url'] . '/' .*//*$GLOBALS['base_url'] . '/' . $gd_2 . '?gall=1'*/ /*. '/' . drupal_encode_path(file_uri_target($uri)))*/'#/' /*$uri*/ . '"' . drupal_attributes($options['attributes']) .  '>' . ($options['html'] ? $output: check_plain($output))/* . $variables['gallery']*/ . '</a>' . '<h1 id="album_data"><a id="album_title" href="#/" onclick="shadowbox.oimg(\''. ${$key} .'\');">' . $gallery . '</a><a id="comment_count" href="'. '#/'.'" >' . $comm_href1 .'</a>' . '</h1>' . '</div>';
+        	$instances[$node->type]['display']['default']['type'] == 'image' ? /*$output*/($out['c']['data'] .= $out_c ) . ($out['c']['pg'][] = $out_c_1 ) . ($i++) : ($out['g']['data'][$key]/*$output*/ .= $out_g) . ($out['g']['pt'][$key][${$key}] = $out_g_1);
+        	$out['g'][$key]['total'] =  ${$key};
+        	${$key} += 1;
+      }
+      $out['c']['total'] = $i - 2;      
+      //$gall = '<img align="center" src="'. drupal_get_path('module','ekmod') . '/image/en/gallery.png'.'"></img>';
+      $gall = ekmod_2($Egall['EKMOD']);      
+      $ett = _ekmod_get_settings();
+      $Egall['EKMOD']['language'] = EKMOD_LANGUAGE;
+      $gall['ekmod_2']['language'] = EKMOD_LANGUAGE;
+      /*$user->uid*//*EKMOD_USER_ID == 1 ? $filename = */file_create_url(file_unmanaged_save_data(drupal_json_encode($nid+$Egall+$settings+$ett),'public://ekmod.json',FILE_EXISTS_REPLACE)); /*: '';*/
+      /*$user->uid*//*EKMOD_USER_ID == 1 ? $filename = */file_create_url(file_unmanaged_save_data(drupal_json_encode($nid+$gall+$settings+$ett),'public://ekmod_2.json',FILE_EXISTS_REPLACE)); /*: ''; */
+      $out['g']['data']['NN'] .= '<div class="end"></div></div></div><a style="background: url(' . drupal_get_path('module','ekmod'). '/image/green_prev.png' . ') no-repeat;" id="image-left"></a><a style="background: url(' . drupal_get_path('module','ekmod') . '/image/green_next.png'. ') no-repeat;" id="image-right"></a></div>';
+      cache_set('ekmod_data', $out, 'cache_page', CACHE_PERMANENT);
+      
+} else {
+    $output/*['status']['#markup']*/ = t('No results were returned.');  
+  cache_set('ekmod_data', $output, 'cache_page', CACHE_PERMANENT);
+   
+}
+
+}
+
+function ekmod_page($variables) 
+{
+
+  // Fetch implementations from cache.
+  if (empty($pg)) {
+    $pg = cache_get('ekmod_data','cache_page')->data;
+    if ($pg === FALSE) {
+      $pg = array();
+    }
+	//    else {
+ 	//     $pg = $pg->data;
+ 	//   }
+  }
+
+	!isset($user) ? $user = $GLOBALS['user'] : true;
+//$dt = cache_get('ekmod_data','cache_page')->data;
+  $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+  $num_per_page = variable_get('ekmod_pager_settings');
+
+if ($id == 0)
+{
+	$iml = $pg['g']['data']['NN'];
+  
+	return $iml ;
+} else
+{
+   $pg['g'][$id]['total'] > $num_per_page ? ($current_page = pager_default_initialize($pg['g'][$id]['total'], $num_per_page)) . ($chunks = array_chunk($pg['g']['pt'][$id],$num_per_page, TRUE)) . ($iml = implode('',$chunks[$current_page]).theme('pager')) : $iml = $pg['g']['data'][$id];
+  
+     $iml .= '<textarea  disabled = "disabled" style="visibility:hidden;position:absolute" name="ekmod_img">' . $pg['c']['data'] . '</textarea>';
+   return $iml;
+}
+
+}
+
+function ekmod_2($variables) 
+{
+  foreach ($variables as $v0 => $v2) 
+{
+  foreach ($v2 as $v5 => $v7)
+  {
+    foreach ($v7 as $k => $item)
+    {
+    
+      isset($item['#image_link']) ? $linked_style = $item['#image_link'] : $linked_style = 'medium' ;
+      if ($linked_style) {
+              $uri = image_style_path($linked_style, $item['uri']); //PVZ: public://styles/large/public/image_name.jpg
+        // list($scheme_1, $syle_uri_path) = explode('://', $uri, 2); // styles/large/public/image_name.jpg
+              $scheme = file_uri_scheme($uri);
+          if (!($scheme == 'http' || $scheme == 'https'))
+          {
+            if ($wrapper = file_stream_wrapper_get_instance_by_uri($uri)) {
+              $uri = $wrapper->getExternalUrl();
+              $uri2 = $wrapper->getDirectoryPath(); //sites/default/files
+            }
+          }
+        //  if (!file_exists($uri)) {
+        // $path = image_style_url($linked_style, $item['uri']);
+          if (!variable_get('clean_url') && file_uri_scheme($uri) == 'public' && !file_exists($uri)) {
+            $uri = file_stream_wrapper_get_instance_by_uri($uri)->getDirectoryPath();
+          }
+        //  }
+      }
+      else {
+     //      $uri = $item['uri'];
+      }
+      $Egall['ekmod_2'][$v0][$v5][$k]['filesize'] = $item['filesize'];
+      $Egall['ekmod_2'][$v0][$v5][$k]['uri'] = $uri;
+      $Egall['ekmod_2'][$v0][$v5][$k]['title'] = $item['title'];
+      $Egall['ekmod_2'][$v0][$v5][$k]['alt'] = $item['alt'];
+      $Egall['ekmod_2'][$v0][$v5][$k]['height'] = $item['height'];
+      $Egall['ekmod_2'][$v0][$v5][$k]['width'] = $item['width'];
+      $Egall['ekmod_2'][$v0][$v5][$k]['timestamp'] = $item['timestamp'];
+    }
+  }
+		// $gallery_id = $variables['gallery'];
+    }
+  return $Egall;
+}
+
+function ekmod_field_instances() {
+$ekmod = ekmod_entity_info();
+$query = db_select('field_config_instance', 'fci', array('fetch' => PDO::FETCH_ASSOC));
+  $query->join('field_config', 'fc', 'fc.id = fci.field_id');
+  $query->fields('fci');
+  $query->condition('fci.bundle', array_keys($ekmod['ekmod']['bundles']));
+  $include_additional = array();
+  $include_inactive = isset($include_additional['include_inactive']) && $include_additional['include_inactive'];
+  $include_deleted = isset($include_additional['include_deleted']) && $include_additional['include_deleted'];
+if (!$include_inactive) {
+    $query
+      ->condition('fc.active', 1)
+      ->condition('fc.storage_active', 1);
+  }
+  if (!$include_deleted) {
+    $query->condition('fc.deleted', 0);
+    $query->condition('fci.deleted', 0);
+  }
+  $instances = array();
+  $results = $query->execute();
+foreach ($results as $record) {
+    // Filter out instances on unknown entity types (for instance because the
+    // module exposing them was disabled).
+//    $entity_info = entity_get_info($record['entity_type']);
+//    if ($include_inactive || $entity_info) {
+	  if ($include_inactive || $ekmod) {
+      $instance = unserialize($record['data']);
+      $instance['id'] = $record['id'];
+      $instance['field_id'] = $record['field_id'];
+      $instance['field_name'] = $record['field_name'];
+      $instance['entity_type'] = $record['entity_type'];
+//    $instance['bundle'] = $record['bundle'];
+      $instance['deleted'] = $record['deleted'];
+//    $instance[$record['bundle']] = $instance['field_name'];
+ //   module_invoke_all('field_read_instance', $instance);
+      $instances[$record['bundle']] = $instance;
+    }
+  }
+  return $instances;
+}
+
+function ekmod_preprocess_node(&$variables) {
+  // This example is from rdf_preprocess_image(). It adds an RDF attribute
+  // to the image hook's variables.
+/*  $variables['attributes']['typeof'] = array('foaf:Image'); */
+//  debug($variables);
+}
+function ekmod_image_default_styles() {
+  $styles = array();
+  $styles['ekmod_scale_fill'] = array();
+  
+  $styles['ekmod_scale_fill']['effects'] = array(
+      array(
+        'name' => 'ekmod_scale_fill', 
+        'data' => array(
+          'width' => 140,
+          'height' => 140,
+          'upscale' => 1,
+        ), 
+        'weight' => 0,
+      ),
+  );
+
+  return $styles;
+}
+function ekmod_image_style_delete($style) {
+  // If a module defines an image style and that style is renamed by the user
+  // the module should update any references to that style.
+  if (isset($style['old_name']) && $style['old_name'] == variable_get('ekmod_style_name', '')) {
+    variable_set('ekmod_style_name', $style['name']);
+  }
+}
+
+function ekmod_image_toolkits() {
+  return array(
+    'working' => array(
+      'title' => t('scale_WTF'), 
+      'available' => TRUE,
+    ), 
+    'broken' => array(
+      'title' => t('A toolkit that is "broken" and will not be listed.'), 
+      'available' => FALSE,
+    ),
+  );
+}
+
+/*
+hook_image_effect_info
+*/
+function ekmod_image_effect_info() {
+  $effects = array();
+
+  $effects['ekmod_scale_fill'] = array(
+    'label' => t('Scale and fill'), 
+    'help' => t('Scaling will maintain the aspect-ratio of the original image. If only a single dimension is specified, the other dimension will be calculated.'), 
+    'effect callback' => 'ekmod_scale_and_fill_effect', 
+    'dimensions callback' => 'image_scale_dimensions', 
+    'form callback' => 'image_scale_form', 
+    'summary theme' => 'image_scale_summary',
+  );
+
+  return $effects;
+}
+
+function ekmod_scale_and_fill_effect(&$image, $data) {
+  if (!image_scale_WTF($image, $data['width'], $data['height'], $data['upscale'])) {
+    watchdog('image', 'Image resize and fill failed using the %toolkit toolkit on %path (%mimetype, %dimensions)', array('%toolkit' => $image->toolkit, '%path' => $image->source, '%mimetype' => $image->info['mime_type'], '%dimensions' => $image->info['width'] . 'x' . $image->info['height']), WATCHDOG_ERROR);
+    return FALSE;
+  }
+  return TRUE;
+}
+
+//--ED-MOD-2012.03.06
+function image_scale_WTF(stdClass $image, $width, $height, $upscale) {
+  $dimensions = $image->info;
+	  if (!image_dimensions_scale($dimensions, $width, $height, $upscale)) {
+    return TRUE;
+  }
+  $aspect = $image->info['height'] / $image->info['width'];
+/*  $width = $image->info['width'];
+  $height = $image->info['height'];*/
+  $x = ($width - $dimensions['width']) / 2;
+  $y = ($height - $dimensions['height']) / 2;
+  return image_toolkit_invoke('scale_WTF', $image, array($x, $y, $width, $height,$dimensions));
+}
+
+function image_gd_scale_WTF(stdClass $image, $dst_x, $dst_y, $width, $height,array $dim) {
+   $res = image_gd_create_tmp($image, $width, $height);
+  $res1 = image_gd_create_tmp($image, $dim['width'], $dim['height']);  
+  if (!imagecopyresampled($res1, $image->resource, 0, 0, 0, 0, $dim['width'], $dim['height'],$image->info['width'], $image->info['height']) || !imagecopy($res, $res1, $dst_x, $dst_y, 0, 0, $dim['width'], $dim['height'])) {
+    return FALSE;
+  }
+  imagedestroy($res1);
+  imagedestroy($image->resource);
+  // Update image object.
+  $image->resource = $res;
+  $image->info['width'] = $width;
+  $image->info['height'] = $height;
+  return TRUE;
+}
+
+function ekmod_image_style_save($style) {
+  // If a module defines an image style and that style is renamed by the user
+  // the module should update any references to that style.
+  if (isset($style['old_name']) && $style['old_name'] == variable_get('ekmod_style_name', '')) {
+    variable_set('ekmod_style_name', $style['name']);
+  }
+}
+
+function ekmod_image_style_flush($style) {
+  // Empty cached data that contains information about the style.
+ //  cache_clear_all('*', 'ekmod_module', TRUE);
+}
+
+function ekmod_pager($variables) {
+  $tags = $variables['tags'];
+  $element = $variables['element'];
+  $parameters = $variables['parameters'];
+  $quantity = $variables['quantity'];
+  global $pager_page_array, $pager_total;
+
+  // Calculate various markers within this pager piece:
+  // Middle is used to "center" pages around the current page.
+  $pager_middle = ceil($quantity / 2);
+  // current is the page we are currently paged to
+  $pager_current = $pager_page_array[$element] + 1;
+  // first is the first page listed by this pager piece (re quantity)
+  $pager_first = $pager_current - $pager_middle + 1;
+  // last is the last page listed by this pager piece (re quantity)
+  $pager_last = $pager_current + $quantity - $pager_middle;
+  // max is the maximum page number
+  $pager_max = $pager_total[$element];
+  // End of marker calculations.
+
+  // Prepare for generation loop.
+  $i = $pager_first;
+  if ($pager_last > $pager_max) {
+    // Adjust "center" if at end of query.
+    $i = $i + ($pager_max - $pager_last);
+    $pager_last = $pager_max;
+  }
+  if ($i <= 0) {
+    // Adjust "center" if at start of query.
+    $pager_last = $pager_last + (1 - $i);
+    $i = 1;
+  }
+  // End of generation loop preparation.
+
+  $li_first = theme('pager_first', array('text' => (isset($tags[0]) ? $tags[0] : t('« first')), 'element' => $element, 'parameters' => $parameters));
+  $li_previous = theme('pager_previous', array('text' => (isset($tags[1]) ? $tags[1] : t('‹ previous')), 'element' => $element, 'interval' => 1, 'parameters' => $parameters));
+  $li_next = theme('pager_next', array('text' => (isset($tags[3]) ? $tags[3] : t('next ›')), 'element' => $element, 'interval' => 1, 'parameters' => $parameters));
+  $li_last = theme('pager_last', array('text' => (isset($tags[4]) ? $tags[4] : t('last »')), 'element' => $element, 'parameters' => $parameters));
+
+  if ($pager_total[$element] > 1) {
+    if ($li_first) {
+      $items[] = array(
+        'class' => array('pager-first'), 
+        'data' => $li_first,
+      );
+    }
+    if ($li_previous) {
+      $items[] = array(
+        'class' => array('pager-previous'), 
+        'data' => $li_previous,
+      );
+    }
+
+    // When there is more than one page, create the pager list.
+    if ($i != $pager_max) {
+      if ($i > 1) {
+        $items[] = array(
+          'class' => array('pager-ellipsis'), 
+          'data' => '…',
+        );
+      }
+      // Now generate the actual pager piece.
+      for (; $i <= $pager_last && $i <= $pager_max; $i++) {
+        if ($i < $pager_current) {
+          $items[] = array(
+            'class' => array('pager-item'), 
+            'data' => theme('pager_previous', array('text' => $i, 'element' => $element, 'interval' => ($pager_current - $i), 'parameters' => $parameters)),
+          );
+        }
+        if ($i == $pager_current) {
+          $items[] = array(
+            'class' => array('pager-current'), 
+            'data' => $i,
+          );
+        }
+        if ($i > $pager_current) {
+          $items[] = array(
+            'class' => array('pager-item'), 
+            'data' => theme('pager_next', array('text' => $i, 'element' => $element, 'interval' => ($i - $pager_current), 'parameters' => $parameters)),
+          );
+        }
+      }
+      if ($i < $pager_max) {
+        $items[] = array(
+          'class' => array('pager-ellipsis'), 
+          'data' => '…',
+        );
+      }
+    }
+    // End generation.
+    if ($li_next) {
+      $items[] = array(
+        'class' => array('pager-next'), 
+        'data' => $li_next,
+      );
+    }
+    if ($li_last) {
+      $items[] = array(
+        'class' => array('pager-last'), 
+        'data' => $li_last,
+      );
+    }
+    return '<h2 class="element-invisible">' . t('Pages') . '</h2>' . theme('item_list', array(
+      'items' => $items, 
+      'attributes' => array('class' => array('pager')),
+    ));
+  }
+}
+
+function ekmod_pager_link($variables) {
+  $text = $variables['text'];
+  $page_new = $variables['page_new'];
+  $element = $variables['element'];
+  $parameters = $variables['parameters'];
+  $attributes = $variables['attributes'];
+
+  $page = isset($_GET['page']) ? $_GET['page'] : '';
+  if ($new_page = implode(',', pager_load_array($page_new[$element], $element, explode(',', $page)))) {
+    $parameters['page'] = $new_page;
+  }
+
+  $query = array();
+  if (count($parameters)) {
+    $query = drupal_get_query_parameters($parameters, array());
+  }
+  if ($query_pager = pager_get_query_parameters()) {
+    $query = array_merge($query, $query_pager);
+  }
+
+  // Set each pager link title
+  if (!isset($attributes['title'])) {
+    static $titles = NULL;
+    if (!isset($titles)) {
+      $titles = array(
+        t('« first') => t('Go to first page'), 
+        t('‹ previous') => t('Go to previous page'), 
+        t('next ›') => t('Go to next page'), 
+        t('last »') => t('Go to last page'),
+      );
+    }
+    if (isset($titles[$text])) {
+      $attributes['title'] = $titles[$text];
+    }
+    elseif (is_numeric($text)) {
+      $attributes['title'] = t('Go to page @number', array('@number' => $text));
+    }
+  }
+
+  // @todo l() cannot be used here, since it adds an 'active' class based on the
+//   path only (which is always the current path for pager links). Apparently,
+//   none of the pager links is active at any time - but it should still be
+//   possible to use l() here.
+  // @see http://drupal.org/node/1410574
+
+  $attributes['href'] = url($_GET['q'], array('query' => $query));
+  return '<a' . drupal_attributes($attributes) . '>' . check_plain($text) . '</a>';
+}
+
+/**
+ * An element #process callback for the image_image field type.
+ *
+ * Expands the image_image type to include the alt and title fields.
+ */
+function ekmod_images_field_widget_process($element, &$form_state, $form) {
+  $item = $element['#value'];
+  $item['fid'] = $element['fid']['#value'];
+
+  $instance = field_widget_instance($element, $form_state);
+
+  $settings = $instance['settings'];
+  $widget_settings = $instance['widget']['settings'];
+
+  $element['#theme'] = 'image_widget';
+  $element['#attached']['css'][] = drupal_get_path('module', 'image') . '/image.css';
+
+  // Add the image preview.
+  if ($element['#file'] && $widget_settings['preview_image_style']) {
+    $variables = array(
+      'style_name' => $widget_settings['preview_image_style'],
+      'path' => $element['#file']->uri,
+    );
+
+    // Determine image dimensions.
+    if (isset($element['#value']['width']) && isset($element['#value']['height'])) {
+      $variables['width'] = $element['#value']['width'];
+      $variables['height'] = $element['#value']['height'];
+    }
+    else {
+      $info = image_get_info($element['#file']->uri);
+
+      if (is_array($info)) {
+        $variables['width'] = $info['width'];
+        $variables['height'] = $info['height'];
+      }
+      else {
+        $variables['width'] = $variables['height'] = NULL;
+      }
+    }
+
+    $element['preview'] = array(
+      '#type' => 'markup',
+      '#markup' => theme('image_style', $variables),
+    );
+	
+    // Store the dimensions in the form so the file doesn't have to be accessed
+    // again. This is important for remote files.
+    $element['width'] = array(
+      '#type' => 'hidden',
+      '#value' => $variables['width'],
+    );
+    $element['height'] = array(
+      '#type' => 'hidden',
+      '#value' => $variables['height'],
+    );
+  }
+	
+  // Add the additional alt and title fields.
+  $element['alt'] = array(
+    '#title' => t('Alternate text'),
+    '#type' => 'textfield',
+    '#default_value' => isset($item['alt']) ? $item['alt'] : '',
+    '#description' => t('This text will be used by screen readers, search engines, or when the image cannot be loaded.'),
+    // @see http://www.gawds.org/show.php?contentid=28
+    '#maxlength' => 512,
+    '#weight' => -2,
+    '#access' => (bool) $item['fid'] && $settings['alt_field'],
+  );
+  $element['name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Image name'),
+    '#default_value' => isset($item['name']) ? $item['name'] : '',
+    '#description' => t('The title is used as a tool tip when the user hovers the mouse over the image.'),
+    '#maxlength' => 1024,
+    '#weight' => -1,
+    '#access' => (bool) $item['fid'] && $settings['name_field'],
+  );
+  $element['title'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Title'),
+    '#default_value' => isset($item['title']) ? $item['title'] : '',
+    '#description' => t('The title is used as a tool tip when the user hovers the mouse over the image.'),
+    '#maxlength' => 1024,
+    '#weight' => -1,
+    '#access' => (bool) $item['fid'] && $settings['title_field'],
+  );
+  
+
+  return $element;
+}
+
+function ekmod_load($aid = NULL, $vid = NULL, $reset = FALSE) {
+  $entity_type = 'ekmod';
+  $module = 'ekmod';
+  $hook = 'entity_info';
+  $func = $module . '_' . $hook;
+  global $language;
+  $langcode = $language->language;
+  $aids = (isset($aid) ? array($aid) : array());
+  $conditions = (isset($vid) ? array('ver' => $vid) : array());
+  ekmod_entity_controller()->resetCache();
+  $ekmod_ent = ekmod_entity_controller()->load($aids,$conditions);
+  return $ekmod_ent ? reset($ekmod_ent) : NULL;
+}
+
+function ekmod_load_types($rebuild = FALSE) {
+	$cid = 'ekmod_type_list_build:' . $GLOBALS['language']->language;
+	$m = null;
+
+$ekmod_types = (object) array('cache' => FALSE,'types' => array(), 'names' => array());
+$ekmod_types->names = array('ekmod_album_image' => t('Album'), 'ekmod_album_category_image' => t('Category'));
+$ekmod_types->types = array (
+	'ekmod_album_image' => (object) array(
+      'type' => 'ekmod_album_image',
+      'has_title' => TRUE,
+      'title_label' => t('Title'),
+      'base' => 'ekmod_content',
+      'name' => t('Album'),
+      'module' => 'ekmod',
+      'description' => t('Create image , video Albums '),
+      'delete' => 0,
+	),
+  	'ekmod_album_category_image' => (object) array
+    (
+      'type' => 'ekmod_album_category_image',
+      'has_title' => TRUE,
+      'title_label' => t('Title'),
+      'base' => 'ekmod_content',
+      'name' => t('Category'),
+      'module' => 'ekmod',
+      'description' => t('create image , video Albums '),
+      'delete' => 0,
+     ),
+);
+if ($m == 1) {	
+ 
+	$query = db_select('ekmod_type', 't')
+		->addTag('translatable')
+		->addTag('ekmod_type_access')
+		->fields('t')
+		->orderBy('t.type','ASC');
+	if (!$rebuild) {
+		$query->condition('disabled',0);
+	}
+	
+	foreach ($query->execute() as $ekmod_type) {
+      	$type_db = $ekmod_type->type;
+      	// Original disabled value.
+      	$disabled = $ekmod_type->disabled;
+      	// Check for node types from disabled modules and mark their types for removal.
+      	// Types defined by the node module in the database (rather than by a separate
+      	// module using hook_node_info) have a base value of 'node_content'. The isset()
+      	// check prevents errors on old (pre-Drupal 7) databases.
+      	/*
+      	if (isset($ekmod_type->base) && $ekmod_type->base != 'ekmod_content_form' && empty($ekmod_types->types[$type_db])) {
+        		$ekmod_type->disabled = TRUE;
+      	}
+      	*/
+      	if (isset($ekmod_types->types[$type_db])) {
+        		$ekmod_type->disabled = FALSE;
+      	}
+      	
+      if (!isset($ekmod_types->types[$type_db]) || $ekmod_type->modified) {
+        		$ekmod_types->types[$type_db] = $ekmod_type;
+        		$ekmod_types->names[$type_db] = $ekmod_type->name;
+  
+        	if ($type_db != $ekmod_type->orig_type) {
+          	unset($ekmod_types->types[$ekmod_type->orig_type]);
+          	unset($ekmod_types->names[$ekmod_type->orig_type]);
+        	}
+      }
+      	$ekmod_types->types[$type_db]->disabled = $ekmod_type->disabled;
+      	$ekmod_types->types[$type_db]->disabled_changed = $disabled != $ekmod_type->disabled;
+	}
+//$ekmod_types->module['types'] = array('album_image' =>  t('Album'), 'album_category_image' => t('Category'));
+  if ($rebuild) {
+    foreach ($ekmod_types->types as $type => $type_object) {
+      if (!empty($type_object->is_new) || !empty($type_object->disabled_changed)) {
+        $existing_type = !empty($type_object->old_type) ? $type_object->old_type : $type_object->type;
+      	$is_existing = (bool) db_query_range('SELECT 1 FROM {ekmod_type} WHERE type = :type', 0, 1, array(':type' => $existing_type))->fetchField();
+        $type_object = (array) $type_object;
+      	$new_type = $type_object + array(
+		    'type' => '', 
+		    'name' => '', 
+		    'base' => '', 
+		    'description' => '', 
+		    'help' => '', 
+		    'custom' => 0, 
+		    'modified' => 0, 
+		    'locked' => 1, 
+		    'disabled' => 0, 
+		    'is_new' => 1, 
+		    'has_title' => 1, 
+		    'title_label' => 'Title',
+	  	);
+	  	  $new_type = (object) $new_type;
+
+  		// If the type has no title, set an empty label.
+  		if (!$new_type->has_title) {
+    		$new_type->title_label = '';
+  		}
+  		
+  		if (empty($new_type->module)) {
+    		$new_type->module = $new_type->base == 'ekmod_content_form' ? 'ekmod' : '';
+  		}
+  		
+  		$new_type->orig_type = isset($info['type']) ? $info['type'] : '';
+
+	  	  $fields = array(
+    		'type' => (string) $new_type->type, 
+   			'name' => (string) $new_type->name, 
+    		'base' => (string) $new_type->base, 
+    		'has_title' => (int) $new_type->has_title, 
+    		'title_label' => (string) $new_type->title_label, 
+    		'description' => (string) $new_type->description, 
+    		'help' => (string) $new_type->help, 
+    		'custom' => (int) $new_type->custom, 
+    		'modified' => (int) $new_type->modified, 
+    		'locked' => (int) $new_type->locked, 
+    		'disabled' => (int) $new_type->disabled, 
+    		'module' => $new_type->module,
+  		  );
+
+  if ($is_existing) {
+    db_update('ekmod_type')
+      ->fields($fields)
+      ->condition('type', $existing_type)
+      ->execute();
+
+    if (!empty($new_type->old_type) && $new_type->old_type != $new_type->type) {
+  
+    }
+    //module_invoke_all('ekmod_type_update', $type);
+    $status = SAVED_UPDATED;
+  } else {
+    $fields['orig_type'] = (string) $new_type->orig_type;
+    db_insert('ekmod_type')
+      ->fields($fields)
+      ->execute();
+
+ //   field_attach_create_bundle('ekmod', $new_type->type);
+
+ // module_invoke_all('ekmod_type_insert', $new_type);
+    $status = SAVED_NEW;
+  }
+
+ 		// Clear the node type cache
+ 		cache_clear_all('ekmod_type_list_build:','cache', TRUE);
+ 		drupal_static_reset('ekmod_load_types');
+      }
+    }
+
+  }
+}  
+  	asort($ekmod_types->names);
+
+  	cache_set($cid, $ekmod_types);
+
+	return $ekmod_types;
+}
+
+function ekmod_type_name_ld($ekmod) {
+  $types = ekmod_load_types()->types;
+  $name = is_object($ekmod) ? (strtr($ekmod->type, array('-' => '_'))) : (strtr($ekmod, array('-' => '_')));
+  return isset($types[$name]) ? $types[$name] : FALSE;
+}
+
+function ekmod_content_form($ekmod, $form_state) {
+	$form = array();
+	$type = ekmod_load_types()->types[$ekmod->type];
+	
+	if($type->has_title) {
+	$form['title'] = array (
+		'#type' => 'textfield',
+		'#title' => check_plain($type->title_label), // $type->title_label
+		'#required' => TRUE,
+		'#default_value' => $ekmod->title,
+		'#maxlength' => 255,
+		'#weight' => -5,
+	);
+	}
+  return $form;
+}
+/**
+ * Load node entities from the database.
+ *
+ * This function should be used whenever you need to load more than one node
+ * from the database. Nodes are loaded into memory and will not require
+ * database access if loaded again during the same page request.
+ *
+ * @see entity_load()
+ * @see EntityFieldQuery
+ *
+ * @param $nids
+ *   An array of node IDs.
+ * @param $conditions
+ *   (deprecated) An associative array of conditions on the {node}
+ *   table, where the keys are the database fields and the values are the
+ *   values those fields must have. Instead, it is preferable to use
+ *   EntityFieldQuery to retrieve a list of entity IDs loadable by
+ *   this function.
+ * @param $reset
+ *   Whether to reset the internal node_load cache.
+ *
+ * @return
+ *   An array of node objects indexed by nid.
+ *
+ * @todo Remove $conditions in Drupal 8.
+ */
+function ekmod_load_multiple($nids = array(), $conditions = array(), $reset = FALSE) {
+  return ekmod_load('ekmod', $nids, $conditions, $reset);
+}
+
+function ekmod_save($ekmod) {
+//return ekmod_entity_controller()->save($ekmod);
+	return entity_get_controller('ekmod')->save($ekmod);
+}
+
+  function ekmod_uri($ekmod) 
+  {
+    return array(
+      'path' => 'Gallery/' . $ekmod->id,
+    );
+  }
+  
+function ekmod_inf($type) {
+	return $type->name . ': ' . $type->description;
+}
+
+function _ekmod_save_revision($ekmod, $uid, $update = NULL) {
+  // Hold on to the ekmods's original creator_uid but swap
+  // in the revision's creator_uid for the momentary write.
+//  $update = 'ver';
+  $temp_uid = $ekmod->utr;
+  $ekmod->utr = $uid;
+  if (isset($update)) {
+    drupal_write_record('ekmod_revision', $ekmod, $update);
+  }
+  else {
+    drupal_write_record('ekmod_revision', $ekmod);
+  }
+  // Have node object still show node owner's uid, not revision author's.
+  $ekmod->utr = $temp_uid;
+ // debug($ekmod);
+}
+
+/**
+ * Title callback.
+ */
+function ekmod_page_title($ekmod) {
+  return $ekmod->title;
+}
+
+/**
+ * Builds a structured array representing the node's content.
+ *
+ * The content built for the node (field values, comments, file attachments or
+ * other node components) will vary depending on the $view_mode parameter.
+ *
+ * Drupal core defines the following view modes for nodes, with the following
+ * default use cases:
+ *   - full (default): node is being displayed on its own page (node/123)
+ *   - teaser: node is being displayed on the default home page listing, on
+ *     taxonomy listing pages, or on blog listing pages.
+ *   - rss: node displayed in an RSS feed.
+ *   If search.module is enabled:
+ *   - search_index: node is being indexed for search.
+ *   - search_result: node is being displayed as a search result.
+ *   If book.module is enabled:
+ *   - print: node is being displayed in print-friendly mode.
+ * Contributed modules might define additional view modes, or use existing
+ * view modes in additional contexts.
+ *
+ * @param $node
+ *   A node object.
+ * @param $view_mode
+ *   View mode, e.g. 'full', 'teaser'...
+ * @param $langcode
+ *   (optional) A language code to use for rendering. Defaults to the global
+ *   content language of the current request.
+ */
+function ekmod_page_view($ekmod, $view_mode = 'full', $langcode = NULL) {
+  if (!isset($langcode)) {
+    $langcode = $GLOBALS['language_content']->language;
+  }
+
+  // Remove previously built content, if exists.
+  $ekmod->content = array();
+
+  // Build fields content.
+  // In case of a multiple view, node_view_multiple() already ran the
+  // 'prepare_view' step. An internal flag prevents the operation from running
+  // twice.
+  field_attach_prepare_view('ekmod', array($ekmod->id => $ekmod), $view_mode, $langcode);
+  entity_prepare_view('ekmod', array($ekmod->id => $ekmod), $langcode);
+  $ekmod->content += field_attach_view('ekmod', $ekmod, $view_mode, $langcode);
+  
+  if ($view_mode == 'teaser') {
+    $ekmod->content['title'] = array(
+      '#markup' => filter_xss($ekmod->title),
+      '#weight' => -4,
+    );
+  }
+
+  return $ekmod->content;
+}
+
+
+/**
+ * Delete a node.
+ *
+ * @param $nid
+ *   A node ID.
+ */
+function ekmod_delete($nid) {
+	ekmod_delete_multiple(array($nid));
+}
+
+function ekmod_delete_multiple($nid) {
+	return ekmod_entity_controller('ekmod')->delete($nid);
+}
+
+/**
+ * Delete a EKMOD node revision.
+ *
+ * @param $revision_id
+ *   The revision ID to delete.
+ */
+
+function ekmod_revision_delete($revision_id) {
+  if ($revision = ekmod_load(NULL, $revision_id)) {
+    // Prevent deleting the current revision.
+    $node = ekmod_load($revision->id);
+    if ($revision_id == $node->ver) {
+      return FALSE;
+    }
+
+    db_delete('ekmod_revision')
+      ->condition('id', $revision->id)
+      ->condition('ver', $revision->ver)
+      ->execute();
+//  module_invoke_all('ekmod_revision_delete', $revision);
+    field_attach_delete_revision('ekmod', $revision);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * @defgroup node_access Node access rights
+ * @{
+ * The node access system determines who can do what to which nodes.
+ *
+ * In determining access rights for a node, node_access() first checks
+ * whether the user has the "bypass node access" permission. Such users have
+ * unrestricted access to all nodes. user 1 will always pass this check.
+ *
+ * Next, all implementations of hook_node_access() will be called. Each
+ * implementation may explicitly allow, explicitly deny, or ignore the access
+ * request. If at least one module says to deny the request, it will be rejected.
+ * If no modules deny the request and at least one says to allow it, the request
+ * will be permitted.
+ *
+ * If all modules ignore the access request, then the node_access table is used
+ * to determine access. All node access modules are queried using
+ * hook_node_grants() to assemble a list of "grant IDs" for the user. This list
+ * is compared against the table. If any row contains the node ID in question
+ * (or 0, which stands for "all nodes"), one of the grant IDs returned, and a
+ * value of TRUE for the operation in question, then access is granted. Note
+ * that this table is a list of grants; any matching row is sufficient to
+ * grant access to the node.
+ *
+ * In node listings (lists of nodes generated from a select query, such as the
+ * default home page at path 'node', an RSS feed, a recent content block, etc.),
+ * the process above is followed except that hook_node_access() is not called on
+ * each node for performance reasons and for proper functioning of the pager
+ * system. When adding a node listing to your module, be sure to use a dynamic
+ * query created by db_select() and add a tag of "node_access". This will allow
+ * modules dealing with node access to ensure only nodes to which the user has
+ * access are retrieved, through the use of hook_query_TAG_alter().
+ *
+ * Note: Even a single module returning NODE_ACCESS_DENY from hook_node_access()
+ * will block access to the node. Therefore, implementers should take care to
+ * not deny access unless they really intend to. Unless a module wishes to
+ * actively deny access it should return NODE_ACCESS_IGNORE (or simply return
+ * nothing) to allow other modules or the node_access table to control access.
+ *
+ * To see how to write a node access module of your own, see
+ * node_access_example.module.
+ */
+
+/**
+ * Determine whether the current user may perform the given operation on the
+ * specified node.
+ *
+ * @param $op
+ *   The operation to be performed on the node. Possible values are:
+ *   - "view"
+ *   - "update"
+ *   - "delete"
+ *   - "create"
+ * @param $node
+ *   The node object on which the operation is to be performed, or node type
+ *   (e.g. 'forum') for "create" operation.
+ * @param $account
+ *   Optional, a user object representing the user for whom the operation is to
+ *   be performed. Determines access for a user other than the current user.
+ * @return
+ *   TRUE if the operation may be performed, FALSE otherwise.
+ */
+
+function ekmod_access($op, $ekmod, $account = NULL) {
+  $rights = &drupal_static(__FUNCTION__, array());
+
+  if (!$ekmod || !in_array($op, array('view', 'update', 'delete', 'create'), TRUE)) {
+    // If there was no node to check against, or the $op was not one of the
+    // supported ones, we return access denied.
+    return FALSE;
+  }
+  // If no user object is supplied, the access check is for the current user.
+  if (empty($account)) {
+    $account = $GLOBALS['user'];
+  }
+
+  // $node may be either an object or a node type. Since node types cannot be
+  // an integer, use either id or type as the static cache id.
+
+  $cid = is_object($ekmod) ? $ekmod->id : $ekmod;
+
+  // If we've already checked access for this node, user and op, return from
+  // cache.
+  if (isset($rights[$account->uid][$cid][$op])) {
+    return $rights[$account->uid][$cid][$op];
+  }
+
+  if (user_access('bypass ekmod access', $account)) {
+    $rights[$account->uid][$cid][$op] = TRUE;
+    return TRUE;
+  }
+  if (!user_access('access content', $account)) {
+    $rights[$account->uid][$cid][$op] = FALSE;
+    return FALSE;
+  }
+
+  // We grant access to the node if both of the following conditions are met:
+  // - No modules say to deny access.
+  // - At least one module says to grant access.
+  // If no module specified either allow or deny, we fall back to the
+  // ekmod_access table.
+// $access = module_invoke_all('ekmod_access', $ekmod, $op, $account);
+  if (in_array(EKMOD_ACCESS_DENY, $access, TRUE)) {
+    $rights[$account->uid][$cid][$op] = FALSE;
+    return FALSE;
+  }
+  elseif (in_array(EKMOD_ACCESS_ALLOW, $access, TRUE)) {
+    $rights[$account->uid][$cid][$op] = TRUE;
+    return TRUE;
+  }
+
+  // Check if authors can view their own unpublished nodes.
+  if ($op == 'view' && !$ekmod->status && user_access('view own unpublished content', $account) && $account->uid == $ekmod->uid && $account->uid != 0) {
+    $rights[$account->uid][$cid][$op] = TRUE;
+    return TRUE;
+  }
+
+  // If the module did not override the access rights, use those set in the
+  // node_access table.
+  if ($op != 'create' && $ekmod->id) {
+    if (module_implements('ekmod_grants')) {
+      $query = db_select('ekmod_access');
+      $query->addExpression('1');
+      $query->condition('grant_' . $op, 1, '>=');
+      $nids = db_or()->condition('id', $ekmod->id);
+      if ($ekmod->status) {
+        $nids->condition('id', 0);
+      }
+      $query->condition($nids);
+      $query->range(0, 1);
+
+      $grants = db_or();
+      foreach (ekmod_access_grants($op, $account) as $realm => $gids) {
+        foreach ($gids as $gid) {
+          $grants->condition(db_and()
+            ->condition('gid', $gid)
+            ->condition('realm', $realm)
+          );
+        }
+      }
+      if (count($grants) > 0) {
+        $query->condition($grants);
+      }
+      $result =  (bool) $query
+        ->execute()
+        ->fetchField();
+      $rights[$account->uid][$cid][$op] = $result;
+      return $result;
+    }
+    elseif (is_object($ekmod) && $op == 'view' && $ekmod->status) {
+      // If no modules implement hook_node_grants(), the default behavior is to
+      // allow all users to view published nodes, so reflect that here.
+      $rights[$account->uid][$cid][$op] = TRUE;
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * Access callback: Checks node revision access.
+ *
+ * @param $node
+ *   The node to check.
+ * @param $op
+ *   (optional) The specific operation being checked. Defaults to 'view.'
+ * @param object $account
+ *   (optional) A user object representing the user for whom the operation is
+ *   to be performed. Determines access for a user other than the current user.
+ *
+ * @return
+ *   TRUE if the operation may be performed, FALSE otherwise.
+ *
+ * @see node_menu()
+ */
+function _ekmod_revision_access($node, $op = 'view', $account = NULL) {
+  $access = &drupal_static(__FUNCTION__, array());
+
+  $map = array(
+    'view' => 'view revisions',
+    'update' => 'revert revisions',
+    'delete' => 'delete revisions',
+  );
+
+  if (!$node || !isset($map[$op])) {
+    // If there was no node to check against, or the $op was not one of the
+    // supported ones, we return access denied.
+    return FALSE;
+  }
+
+  if (!isset($account)) {
+    $account = $GLOBALS['user'];
+  }
+
+  // Statically cache access by revision ID, user account ID, and operation.
+  $cid = $node->ver . ':' . $account->uid . ':' . $op;
+
+  if (!isset($access[$cid])) {
+    // Perform basic permission checks first.
+    if (!user_access($map[$op], $account) && !user_access('administer ekmod nodes', $account)) {
+      return $access[$cid] = FALSE;
+    }
+
+    $node_current_revision = ekmod_load($node->id);
+    $is_current_revision = $node_current_revision->ver == $node->ver;
+
+    // There should be at least two revisions. If the ver of the given node
+    // and the ver of the current revision differ, then we already have two
+    // different revisions so there is no need for a separate database check.
+    // Also, if you try to revert to or delete the current revision, that's
+    // not good.
+    if ($is_current_revision && (db_query('SELECT COUNT(ver) FROM {ekmod_revision} WHERE id = :id', array(':id' => $node->id))->fetchField() == 1 || $op == 'update' || $op == 'delete')) {
+      $access[$cid] = FALSE;
+    }
+    elseif (user_access('administer ekmod nodes', $account)) {
+      $access[$cid] = TRUE;
+    }
+    else {
+      // First check the access to the current revision and finally, if the
+      // node passed in is not the current revision then access to that, too.
+      $access[$cid] = ekmod_access($op, $node_current_revision, $account) && ($is_current_revision || ekmod_access($op, $node, $account));
+    }
+  }
+
+  return $access[$cid];
+}
+
+function _ekmod_add_access() {
+  $types = ekmod_load_types()->types;
+  foreach ($types as $type) {
+    if (/*ekmod_hook($type->type, 'form') &&*/ ekmod_access('create', $type->type)) {
+      return TRUE;
+    }
+  }
+  if (user_access('administer content types')) {
+    // There are no content types defined that the user has permission to create,
+    // but the user does have the permission to administer the content types, so
+    // grant them access to the page anyway.
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * Implements hook_user_delete().
+ */
+function ekmod_user_delete($account) {
+  // Delete nodes (current revisions).
+  // @todo Introduce node_mass_delete() or make node_mass_update() more flexible.
+    db_delete('ekmod_user')
+    ->condition('utr', $account->uid)
+    ->execute();
+  $nodes = db_select('ekmod_module', 'n')
+    ->fields('n', array('id'))
+    ->condition('utr', $account->uid)
+    ->execute()
+    ->fetchCol();
+  ekmod_delete_multiple($nodes);
+  // Delete old revisions.
+  $revisions = db_query('SELECT ver FROM {ekmod_revision} WHERE utr = :utr', array(':utr' => $account->uid))->fetchCol();
+  foreach ($revisions as $revision) {
+    ekmod_revision_delete($revision);
+  }
+  // Clean history.
+  db_delete('ekmod_history')
+    ->condition('utr', $account->uid)
+    ->execute();
+}
+
+function ekmod_menu_get_item_alter(&$router_item, $path, $original_map) {
+  //$ekmod_menu_item_cache = &drupal_static(__FUNCTION__, array());
+  // $path = $_GET['q'];
+  // When retrieving the router item for the current path...
+  // debug($path);
+  $path = array('ekmod/add/ekmod-album-image','ekmod/add/ekmod_album_category_image',);
+  $result = db_query("SELECT * FROM {menu_links} WHERE link_path IN (:link_path)", array(':link_path' => $path));
+  /*	debug($result);  */
+  foreach ($result as $link) {
+    //  _menu_delete_item($link);
+  }
+  if ($path == 'node/add') {
+  $ekmod_add_link = array('ekmod','add');  
+  }
+}
+
+function ekmod_menu_local_tasks_alter(&$data, $router_item, $root_path) {
+  
+}
+
+function ekmod_form_system_theme_settings_alter(&$form, &$form_state) {
+  
+}
+
+function ekmod_theme_registry_alter(&$theme_registry) {
+ 
+}
+
+function ekmod_menu_alter(&$items) {
+  
+}
+
+/**
+ * Gets the list of node access grants and writes them to the database.
+ *
+ * This function is called when a node is saved, and can also be called by
+ * modules if something other than a node save causes node access permissions to
+ * change. It collects all node access grants for the node from
+ * hook_node_access_records() implementations, allows these grants to be altered
+ * via hook_node_access_records_alter() implementations, and saves the collected
+ * and altered grants to the database.
+ *
+ * @param $node
+ *   The $node to acquire grants for.
+ *
+ * @param $delete
+ *   Whether to delete existing node access records before inserting new ones.
+ *   Defaults to TRUE.
+ */
+function ekmod_access_acquire_grants($node, $delete = TRUE) {
+  //$grants = module_invoke_all('ekmod_access_records', $node);
+  // We only care about the node if it has been marked private. If not, it is
+  // treated just like any other node and we completely ignore it.
+//  if ($node->private) {
+//      if ($node->status) {
+//      $grants[] = array(
+//        'realm' => 'ekmod_mod',
+//        'gid' => 1,
+//        'grant_view' => 1,
+//        'grant_update' => 0,
+//        'grant_delete' => 0,
+//        'priority' => 0,
+//      );
+//    }
+//  }
+  // Let modules alter the grants.
+  //drupal_alter('ekmod_access_records', $grants, $node);
+  // If no grants are set and the node is published, then use the default grant.
+  if (empty($grants) && !empty($node->status)) {
+    $grants[] = array('realm' => 'all', 'gid' => 0, 'grant_view' => 1, 'grant_update' => 0, 'grant_delete' => 0);
+  }
+  else {
+    // Retain grants by highest priority.
+    $grant_by_priority = array();
+    foreach ($grants as $g) {
+      $grant_by_priority[intval($g['priority'])][] = $g;
+    }
+    krsort($grant_by_priority);
+    $grants = array_shift($grant_by_priority);
+  }
+
+  ekmod_access_write_grants($node, $grants, NULL, $delete);
+}
+
+/**
+ * Writes a list of grants to the database, deleting any previously saved ones.
+ *
+ * If a realm is provided, it will only delete grants from that realm, but it
+ * will always delete a grant from the 'all' realm. Modules that utilize
+ * node_access can use this function when doing mass updates due to widespread
+ * permission changes.
+ *
+ * Note: Don't call this function directly from a contributed module. Call
+ * node_access_acquire_grants() instead.
+ *
+ * @param $node
+ *   The $node being written to. All that is necessary is that it contains a
+ *   id.
+ * @param $grants
+ *   A list of grants to write. Each grant is an array that must contain the
+ *   following keys: realm, gid, grant_view, grant_update, grant_delete.
+ *   The realm is specified by a particular module; the gid is as well, and
+ *   is a module-defined id to define grant privileges. each grant_* field
+ *   is a boolean value.
+ * @param $realm
+ *   If provided, only read/write grants for that realm.
+ * @param $delete
+ *   If false, do not delete records. This is only for optimization purposes,
+ *   and assumes the caller has already performed a mass delete of some form.
+ */
+function ekmod_access_write_grants($node, $grants, $realm = NULL, $delete = TRUE) {
+  if ($delete) {
+    $query = db_delete('ekmod_access')->condition('id', $node->id);
+    if ($realm) {
+      $query->condition('realm', array($realm, 'all'), 'IN');
+    }
+    $query->execute();
+  }
+
+  // Only perform work when node_access modules are active.
+  if (!empty($grants) && count(module_implements('ekmod_grants'))) {
+    $query = db_insert('ekmod_access')->fields(array('id', 'realm', 'gid', 'grant_view', 'grant_update', 'grant_delete'));
+    foreach ($grants as $grant) {
+      if ($realm && $realm != $grant['realm']) {
+        continue;
+      }
+      // Only write grants; denies are implicit.
+      if ($grant['grant_view'] || $grant['grant_update'] || $grant['grant_delete']) {
+        $grant['id'] = $node->id;
+        $query->values($grant);
+      }
+    }
+    $query->execute();
+  }
+}
+/**
+ * Rebuild the node access database. This is occasionally needed by modules
+ * that make system-wide changes to access levels.
+ *
+ * When the rebuild is required by an admin-triggered action (e.g module
+ * settings form), calling node_access_needs_rebuild(TRUE) instead of
+ * node_access_rebuild() lets the user perform his changes and actually
+ * rebuild only once he is done.
+ *
+ * Note : As of Drupal 6, node access modules are not required to (and actually
+ * should not) call node_access_rebuild() in hook_enable/disable anymore.
+ *
+ * @see node_access_needs_rebuild()
+ *
+ * @param $batch_mode
+ *   Set to TRUE to process in 'batch' mode, spawning processing over several
+ *   HTTP requests (thus avoiding the risk of PHP timeout if the site has a
+ *   large number of nodes).
+ *   hook_update_N and any form submit handler are safe contexts to use the
+ *   'batch mode'. Less decidable cases (such as calls from hook_user,
+ *   hook_taxonomy, etc...) might consider using the non-batch mode.
+ */
+function ekmod_access_rebuild($batch_mode = FALSE) {
+  db_delete('ekmod_access')->execute();
+  // Only recalculate if the site is using a node_access module.
+  if (count(module_implements('ekmod_grants'))) {
+    if ($batch_mode) {
+      $batch = array(
+        'title' => t('Rebuilding content access permissions'),
+        'operations' => array(
+          array('_ekmod_access_rebuild_batch_operation', array()),
+        ),
+        'finished' => '_ekmod_access_rebuild_batch_finished'
+      );
+      batch_set($batch);
+    }
+    else {
+      // Try to allocate enough time to rebuild node grants
+      drupal_set_time_limit(240);
+
+      $nids = db_query("SELECT id FROM {ekmod_module}")->fetchCol();
+      foreach ($nids as $nid) {
+        $node = ekmod_load($nid, NULL, TRUE);
+        // To preserve database integrity, only acquire grants if the node
+        // loads successfully.
+        if (!empty($node)) {
+          ekmod_access_acquire_grants($node);
+        }
+      }
+    }
+  }
+  else {
+    // Not using any node_access modules. Add the default grant.
+    db_insert('ekmod_access')
+      ->fields(array(
+        'id' => 0,
+        'realm' => 'all',
+        'gid' => 0,
+        'grant_view' => 1,
+        'grant_update' => 0,
+        'grant_delete' => 0,
+      ))
+      ->execute();
+  }
+
+  if (!isset($batch)) {
+    drupal_set_message(t('Content permissions have been rebuilt.'));
+    ekmod_access_needs_rebuild(FALSE);
+    cache_clear_all();
+  }
+  //$count_user = db_query('SELECT COUNT(users.uid) - COUNT(ekmod_user.utr) FROM ekmod_user RIGHT JOIN users ON ekmod_user.utr = users.uid WHERE ekmod_user.utr IS NULL')->fetchColumn();
+    $count_user = db_query('SELECT users.uid FROM users LEFT JOIN ekmod_user ON users.uid = ekmod_user.utr WHERE ekmod_user.utr IS NULL')->fetchAll();
+	if (/*$user_cnt != $ekmod_user_cnt*/$count_user) {
+    	foreach($count_user as $id)
+    	{
+    		db_query('INSERT INTO ekmod_user(utr) VALUES('.$id->uid.')');
+    		// $id = db_insert('ekmod_user')->fields(array('utr'=>$ud))->execute();
+    	}
+	}
+}
+
+/**
+ * Batch operation for node_access_rebuild_batch.
+ *
+ * This is a multistep operation : we go through all nodes by packs of 20.
+ * The batch processing engine interrupts processing and sends progress
+ * feedback after 1 second execution time.
+ */
+function _ekmod_access_rebuild_batch_operation(&$context) {
+  if (empty($context['sandbox'])) {
+    // Initiate multistep processing.
+    $context['sandbox']['progress'] = 0;
+    $context['sandbox']['current_node'] = 0;
+    $context['sandbox']['max'] = db_query('SELECT COUNT(DISTINCT id) FROM {ekmod_module}')->fetchField();
+  }
+
+  // Process the next 20 nodes.
+  $limit = 20;
+  $nids = db_query_range("SELECT id FROM {ekmod_module} WHERE id > :id ORDER BY id ASC", 0, $limit, array(':id' => $context['sandbox']['current_node']))->fetchCol();
+  $nodes = ekmod_load_multiple($nids, array(), TRUE);
+  foreach ($nodes as $nid => $node) {
+    // To preserve database integrity, only acquire grants if the node
+    // loads successfully.
+    if (!empty($node)) {
+      ekmod_access_acquire_grants($node);
+    }
+    $context['sandbox']['progress']++;
+    $context['sandbox']['current_node'] = $nid;
+  }
+
+  // Multistep processing : report progress.
+  if ($context['sandbox']['progress'] != $context['sandbox']['max']) {
+    $context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
+  }
+}
+
+function ekmod_form_node_admin_content_alter(&$form, &$form_state, $form_id) {
+
+}
+
+/**
+ * Form builder: Builds the node administration overview.
+ */
+function node_admin_for_ekmod() {
+  $admin_access = user_access('administer ekmod');
+
+  // Build the 'Update options' form.
+  $form['options'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Update options'),
+    '#attributes' => array('class' => array('container-inline')),
+    '#access' => $admin_access,
+  );
+
+  // Enable language column if translation module is enabled or if we have any
+  // node with language.
+  $multilanguage = (module_exists('translation') || db_query_range("SELECT 1 FROM {ekmod_module} WHERE language <> :language", 0, 1, array(':language' => LANGUAGE_NONE))->fetchField());
+
+  // Build the sortable table header.
+  $header = array(
+    'title' => array('data' => t('Title'), 'field' => 'e.title'),
+    'type' => array('data' => t('Type'), 'field' => 'e.type'),
+    'author' => t('Author'),
+    'status' => array('data' => t('Status'), 'field' => 'e.status'),
+    'changed' => array('data' => t('Updated'), 'field' => 'e.changed', 'sort' => 'desc')
+  );
+  if ($multilanguage) {
+    $header['language'] = array('data' => t('Language'), 'field' => 'e.language');
+  }
+  $header['operations'] = array('data' => t('Operations'));
+
+  $query = db_select('ekmod_module', 'e')->extend('PagerDefault')->extend('TableSort');
+  node_build_filter_query($query);
+
+  if (!user_access('bypass node access')) {
+    // If the user is able to view their own unpublished nodes, allow them
+    // to see these in addition to published nodes. Check that they actually
+    // have some unpublished nodes to view before adding the condition.
+    if (user_access('view own unpublished content') && $own_unpublished = db_query('SELECT id FROM {ekmod_module} WHERE utr = :utr AND status = :status', array(':utr' => $GLOBALS['user']->uid, ':status' => 0))->fetchCol()) {
+      $query->condition(db_or()
+        ->condition('e.status', 1)
+        ->condition('e.id', $own_unpublished, 'IN')
+      );
+    }
+    else {
+      // If not, restrict the query to published nodes.
+      $query->condition('e.status', 1);
+    }
+  }
+  $nids = $query
+    ->fields('e',array('id'))
+    ->limit(50)
+    ->orderByHeader($header)
+    ->execute()
+    ->fetchCol();
+  $nodes = ekmod_load($nids);
+
+  // Prepare the list of nodes.
+  $languages = language_list();
+  $destination = drupal_get_destination();
+  $options = array();
+  foreach ($nodes as $node) {
+    $l_options = $node->language != LANGUAGE_NONE && isset($languages[$node->language]) ? array('language' => $languages[$node->language]) : array();
+    $options[$node->id] = array(
+      'title' => array(
+        'data' => array(
+          '#type' => 'link',
+          '#title' => $node->title,
+          '#href' => 'node/' . $node->id,
+          '#options' => $l_options,
+          '#suffix' => ' ' . theme('mark', array('type' => node_mark($node->id, $node->changed))),
+        ),
+      ),
+      'type' => check_plain(node_type_get_name($node)),
+      'author' => theme('username', array('account' => $node)),
+      'status' => $node->status ? t('published') : t('not published'),
+      'changed' => format_date($node->changed, 'short'),
+    );
+    if ($multilanguage) {
+      if ($node->language == LANGUAGE_NONE || isset($languages[$node->language])) {
+        $options[$node->id]['language'] = $node->language == LANGUAGE_NONE ? t('Language neutral') : t($languages[$node->language]->name);
+      }
+      else {
+        $options[$node->id]['language'] = t('Undefined language (@langcode)', array('@langcode' => $node->language));
+      }
+    }
+    // Build a list of all the accessible operations for the current node.
+    $operations = array();
+    if (ekmod_access('update', $node)) {
+      $operations['edit'] = array(
+        'title' => t('edit'),
+        'href' => 'node/' . $node->id . '/edit',
+        'query' => $destination,
+      );
+    }
+    if (ekmod_access('delete', $node)) {
+      $operations['delete'] = array(
+        'title' => t('delete'),
+        'href' => 'node/' . $node->id . '/delete',
+        'query' => $destination,
+      );
+    }
+    $options[$node->id]['operations'] = array();
+    if (count($operations) > 1) {
+      // Render an unordered list of operations links.
+      $options[$node->id]['operations'] = array(
+        'data' => array(
+          '#theme' => 'links__node_operations',
+          '#links' => $operations,
+          '#attributes' => array('class' => array('links', 'inline')),
+        ),
+      );
+    }
+    elseif (!empty($operations)) {
+      // Render the first and only operation as a link.
+      $link = reset($operations);
+      $options[$node->id]['operations'] = array(
+        'data' => array(
+          '#type' => 'link',
+          '#title' => $link['title'],
+          '#href' => $link['href'],
+          '#options' => array('query' => $link['query']),
+        ),
+      );
+    }
+  }
+
+  // Only use a tableselect when the current user is able to perform any
+  // operations.
+  if ($admin_access) {
+    $form['nodes'] = array(
+      '#type' => 'tableselect',
+      '#header' => $header,
+      '#options' => $options,
+      '#empty' => t('No content available.'),
+    );
+  }
+  // Otherwise, use a simple table.
+  else {
+    $form['nodes'] = array(
+      '#theme' => 'table',
+      '#header' => $header,
+      '#rows' => $options,
+      '#empty' => t('No content available.'),
+    );
+  }
+
+  $form['pager'] = array('#markup' => theme('pager'));
+  return $form;
+}
+
+function ekmod_forms() {
+  $forms = array();
+  $typed = ekmod_load_types()->names;
+  foreach (array_keys($typed) as $type) {
+  $forms[$type . '_form']['callback'] = 'ekmod_form';
+    //$forms[$t .'_ekmod_form']['callback arguments'] = array('arguments'); 
+    //$forms[$t . '_ekmod_form']['wrapper_callback'] = 'form_wrapper';
+  }
+
+  return $forms;
+}
+
+function ekmod_file_download_access($file_item, $entity_type, $entity) {
+  if ($entity_type == 'ekmod') {
+    return ekmod_access('view', $entity);
+  }
+}
+
+function ekmod_user_insert(&$edit, $account, $category) {
+  db_insert('ekmod_user')
+    ->fields(array(
+	// 'myfield' => $edit['myfield'], 
+    'utr' => $account->uid,
+  ))->execute();
+}
+
